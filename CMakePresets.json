@@ -1,0 +1,28 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "vs2026",
+      "displayName": "Visual Studio 2026, x64",
+      "generator": "Visual Studio 18 2026",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "CHRONO_ROOT": "C:/dev/chrono",
+        "EIGEN3_INCLUDE_DIR": "C:/dev/eigen-5.0.0"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "release",
+      "configurePreset": "vs2026",
+      "configuration": "Release"
+    },
+    {
+      "name": "relwithdebinfo",
+      "configurePreset": "vs2026",
+      "configuration": "RelWithDebInfo"
+    }
+  ]
+}
