@@ -1,0 +1,9 @@
+# Line endings are pinned, not left to core.autocrlf.
+# The golden dumps are compared byte for byte.
+*.tokens text eol=lf
+
+# cmd mis-parses an LF-only batch file.
+*.bat text eol=crlf
+
+# sh chokes on CRLF.
+*.sh text eol=lf

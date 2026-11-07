@@ -9,6 +9,31 @@ size them. The specification is in the sibling repo `../OMBD_Specification`:
 
 ## Build
 
+### `ombdc` (the front end)
+
+- **A unity build, not CMake (Mark).** Run `ombdc\build.bat`, or `ombdc\build.bat debug`. It finds
+  `cl` through vswhere when `cl` isn't on `PATH`.
+  - `src\unity.cpp` `#include`s every front-end `.cpp` and builds `build\ombdc.exe`.
+    `tests\unity_tests.cpp` builds `build\ombdc_tests.exe`.
+  - Add a new `.cpp` to the unity file, not to a build list.
+- **Linux.** `ombdc/build.sh` (or `build.sh debug`) is the POSIX twin. It uses `$CXX`, else
+  `c++`, with `-Wall -Wextra -Wpedantic -Werror`, and runs the same checks.
+  - It's tested with g++ 13 and clang 18 in WSL `Ubuntu-24.04`. From Git Bash, set
+    `MSYS_NO_PATHCONV=1` before calling `wsl.exe --cd /mnt/c/...`.
+  - Keep `build.sh` LF and `build.bat` CRLF. `ombdc/.gitattributes` pins both.
+  - Keep the two scripts in step when either changes.
+- The build fails unless every check passes:
+  - `/W4 /WX`;
+  - the unit tests, including the golden dumps `tests\*.tokens`;
+  - every `.ombd` under `../OMBD_Specification/Examples` lexes.
+- **Style.** C-style C++: structs and free functions, `bool tryX(in, out*)` stages,
+  `Type_function` operations. No classes, templates, exceptions or STL. No Chrono.
+- **Goldens.** Regenerate a golden with `build\ombdc.exe --tokens <model> > tests\<name>.tokens`
+  from cmd or bash, and review it by hand before checking it in. PowerShell's `>` re-encodes the
+  output, so don't use it.
+
+### `chrono_rt_bench`
+
 - Use CMake presets with Visual Studio 2026:
   - `cmake --preset vs2026`
   - `cmake --build --preset release`
@@ -19,7 +44,7 @@ size them. The specification is in the sibling repo `../OMBD_Specification`:
   `cmake/ChronoImport.cmake` imports what is used. Add a library there, with its runtime DLLs
   checked using `dumpbin /dependents`, and keep its compile options matched to the installer's
   `ChronoTargets.cmake`, especially `/arch:AVX2`.
-- There is no test suite yet. `chrono_rt_bench` runs end to end.
+- It has no test suite yet. `chrono_rt_bench` runs end to end.
 
 ## Conventions
 
