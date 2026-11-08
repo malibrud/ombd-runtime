@@ -7,3 +7,6 @@
 
 # sh chokes on CRLF.
 *.sh text eol=lf
+
+# The golden ASTs are compared byte for byte too.
+*.ast text eol=lf

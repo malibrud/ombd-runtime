@@ -7,8 +7,8 @@
 #      src/unity.cpp          -> build/ombdc
 #      tests/unity_tests.cpp  -> build/ombdc_tests
 #  Then the checks run, and any failure fails the build:
-#      the unit tests and the golden token dumps (tests/*.tokens)
-#      every .ombd under ../../OMBD_Specification/Examples must lex
+#      the unit tests and the golden dumps (tests/*.tokens, tests/*.ast)
+#      every .ombd under ../../OMBD_Specification/Examples must parse
 #
 #  Uses $CXX if set, else c++ (g++ or clang++).
 #      ./build.sh           release
@@ -56,18 +56,18 @@ if ! build/ombdc_tests "$EXAMPLES" tests; then
     exit 1
 fi
 
-echo "=== lex every example ==="
+echo "=== parse every example ==="
 # Each failing path is printed on stdout and collected; ombdc's own error
 # message and the "ok" lines go to stderr.
 failed=$(find "$EXAMPLES" -name '*.ombd' | sort | while IFS= read -r f; do
-    if build/ombdc --tokens "$f" >/dev/null; then
+    if build/ombdc --ast "$f" >/dev/null; then
         echo "  ok  $f" >&2
     else
         echo "$f"
     fi
 done)
 if [ -n "$failed" ]; then
-    echo "build: AN EXAMPLE FAILED TO LEX" >&2
+    echo "build: AN EXAMPLE FAILED TO PARSE" >&2
     exit 1
 fi
 

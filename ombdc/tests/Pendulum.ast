@@ -1,0 +1,90 @@
+19:1 SOURCE
+  19:1 DECLARATION
+    19:1 NAME 'gravity'
+    19:10 ITEMS
+      19:10 QUANTITY
+        19:10 LIST
+          19:11 NUMBER '0'
+          19:14 NUMBER '0'
+          19:17 UNARY '-'
+            19:18 NUMBER '9.81'
+        19:24 UNIT 'm/s2'
+  21:1 SYSTEM
+    21:8 NAME 'pendulum'
+    21:17 BLOCK
+      23:3 DECLARATION
+        23:3 NAME 'units'
+        23:10 ITEMS
+          23:10 NAME 'm'
+          23:13 NAME 'kg'
+      26:3 SCOPE
+        26:3 NAME 'points'
+        26:10 BLOCK
+          27:5 DEFINITION
+            27:5 NAME 'pivot'
+            27:15 ITEMS
+              27:15 POINT
+                27:16 NUMBER '0'
+                27:19 NUMBER '0'
+                27:23 NUMBER '0'
+          28:5 DEFINITION
+            28:5 NAME 'rod_end'
+            28:15 ITEMS
+              28:15 POINT
+                28:16 NUMBER '0'
+                28:19 NUMBER '0'
+                28:22 UNARY '-'
+                  28:23 NUMBER '1'
+      32:3 SCOPE
+        32:3 NAME 'bodies'
+        32:10 BLOCK
+          35:5 SCOPE
+            35:5 NAME 'bRod'
+            35:10 BLOCK
+              36:7 DECLARATION
+                36:7 NAME 'mass'
+                36:16 ITEMS
+                  36:16 QUANTITY
+                    36:16 NUMBER '10'
+                    36:19 UNIT 'kg'
+              37:7 DECLARATION
+                37:7 NAME 'cg'
+                37:16 ITEMS
+                  37:16 CALL
+                    37:16 NAME 'mid'
+                    37:20 NAME 'pivot'
+                    37:27 NAME 'rod_end'
+              38:7 DECLARATION
+                38:7 NAME 'inertia'
+                38:16 ITEMS
+                  38:16 QUANTITY
+                    38:16 CALL
+                      38:16 NAME 'diag'
+                      38:21 NUMBER '0.833'
+                      38:28 NUMBER '0.833'
+                      38:35 NUMBER '0.002'
+                    38:42 UNIT 'kg-m2'
+      43:3 SCOPE
+        43:3 NAME 'joints'
+        43:10 BLOCK
+          45:5 DECLARATION
+            45:5 NAME 'jAxle'
+            45:12 ITEMS
+              45:12 NAME 'revolute'
+              45:22 PROPERTY
+                45:22 NAME 'at'
+                45:26 NAME 'pivot'
+              45:33 PROPERTY
+                45:33 NAME 'axis'
+                45:39 LIST
+                  45:40 NUMBER '0'
+                  45:43 NUMBER '1'
+                  45:46 NUMBER '0'
+      49:3 SCOPE
+        49:3 NAME 'assembly'
+        49:12 BLOCK
+          50:5 CHAIN
+            50:5 NAME 'world'
+            50:11 SLOT
+              50:12 NAME 'jAxle'
+            50:19 NAME 'bRod'

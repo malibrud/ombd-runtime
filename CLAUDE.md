@@ -22,15 +22,19 @@ size them. The specification is in the sibling repo `../OMBD_Specification`:
     `MSYS_NO_PATHCONV=1` before calling `wsl.exe --cd /mnt/c/...`.
   - Keep `build.sh` LF and `build.bat` CRLF. `ombdc/.gitattributes` pins both.
   - Keep the two scripts in step when either changes.
+- **Pipeline so far.** `tryReadFile` → `tryLex` → `tryParse`. `ombdc --tokens` and `ombdc --ast`
+  print each stage. The syntax tree is a flat node array linked by index (`src/ast.h`).
 - The build fails unless every check passes:
   - `/W4 /WX`;
-  - the unit tests, including the golden dumps `tests\*.tokens`;
-  - every `.ombd` under `../OMBD_Specification/Examples` lexes.
+  - the unit tests, including the golden dumps `tests\*.tokens` and `tests\*.ast`;
+  - every `.ombd` under `../OMBD_Specification/Examples` parses.
+- **Unity-build names.** Every `static` shares one translation unit, so module helpers carry a
+  prefix (`Parser_peek`), and test helpers `test_`.
 - **Style.** C-style C++: structs and free functions, `bool tryX(in, out*)` stages,
   `Type_function` operations. No classes, templates, exceptions or STL. No Chrono.
 - **Goldens.** Regenerate a golden with `build\ombdc.exe --tokens <model> > tests\<name>.tokens`
-  from cmd or bash, and review it by hand before checking it in. PowerShell's `>` re-encodes the
-  output, so don't use it.
+  (or `--ast` into `tests\<name>.ast`) from cmd or bash. Review it by hand before checking it in.
+  PowerShell's `>` re-encodes the output, so don't use it.
 
 ### `chrono_rt_bench`
 

@@ -14,7 +14,7 @@ enum LexErrorKind
     LEX_UNTERMINATED_STRING,     //  5. reported at the opening "
     LEX_BACKSLASH_IN_STRING,     //  6. a backslash in a string, reported there
     LEX_BAD_BACKSLASH,           //  7. a backslash outside a string not followed by . x or >
-    LEX_LONE_BAR_OR_BANG,        //  8. a | not starting |] or |>, a ! not starting !=
+    LEX_LONE_BANG,               //  8. a ! not starting != (a stray | is a parse error, D168)
     LEX_STRAY_PRIME,             //  9. a ' that does not end an identifier
     LEX_BAD_PUNCTUATION,         // 10. # $ % & ? ~ `
 

@@ -1,0 +1,241 @@
+30:1 SOURCE
+  30:1 DECLARATION
+    30:1 NAME 'gravity'
+    30:10 ITEMS
+      30:10 QUANTITY
+        30:10 LIST
+          30:11 NUMBER '0'
+          30:14 NUMBER '0'
+          30:17 UNARY '-'
+            30:18 NUMBER '9.81'
+        30:24 UNIT 'm/s2'
+  32:1 SYSTEM
+    32:8 NAME 'sliderCrank'
+    32:20 BLOCK
+      34:3 DECLARATION
+        34:3 NAME 'units'
+        34:10 ITEMS
+          34:10 NAME 'm'
+          34:13 NAME 'kg'
+      37:3 SCOPE
+        37:3 NAME 'points'
+        37:10 BLOCK
+          38:5 DEFINITION
+            38:5 NAME 'main_brg'
+            38:17 ITEMS
+              38:17 POINT
+                38:18 NUMBER '0.00'
+                38:24 NUMBER '0'
+                38:27 NUMBER '0'
+          39:5 DEFINITION
+            39:5 NAME 'crank_pin'
+            39:17 ITEMS
+              39:17 POINT
+                39:18 NUMBER '0.05'
+                39:24 NUMBER '0'
+                39:27 NUMBER '0'
+          40:5 DEFINITION
+            40:5 NAME 'wrist_pin'
+            40:17 ITEMS
+              40:17 POINT
+                40:18 NUMBER '0.25'
+                40:24 NUMBER '0'
+                40:27 NUMBER '0'
+      43:3 SCOPE
+        43:3 NAME 'bodies'
+        43:10 BLOCK
+          44:5 SCOPE
+            44:5 NAME 'bCrank'
+            44:13 BLOCK
+              44:15 DECLARATION
+                44:15 NAME 'mass'
+                44:21 ITEMS
+                  44:21 QUANTITY
+                    44:21 NUMBER '2.0'
+                    44:25 UNIT 'kg'
+              44:30 DECLARATION
+                44:30 NAME 'cg'
+                44:34 ITEMS
+                  44:34 CALL
+                    44:34 NAME 'mid'
+                    44:38 NAME 'main_brg'
+                    44:48 NAME 'crank_pin'
+              44:61 DECLARATION
+                44:61 NAME 'inertia'
+                44:70 ITEMS
+                  44:70 QUANTITY
+                    44:70 CALL
+                      44:70 NAME 'diag'
+                      44:75 NUMBER '0.0010'
+                      44:83 NUMBER '0.0020'
+                      44:91 NUMBER '0.0010'
+                    44:99 UNIT 'kg-m2'
+          45:5 SCOPE
+            45:5 NAME 'bRod'
+            45:13 BLOCK
+              45:15 DECLARATION
+                45:15 NAME 'mass'
+                45:21 ITEMS
+                  45:21 QUANTITY
+                    45:21 NUMBER '0.6'
+                    45:25 UNIT 'kg'
+              45:30 DECLARATION
+                45:30 NAME 'cg'
+                45:34 ITEMS
+                  45:34 CALL
+                    45:34 NAME 'mid'
+                    45:38 NAME 'crank_pin'
+                    45:49 NAME 'wrist_pin'
+              45:61 DECLARATION
+                45:61 NAME 'inertia'
+                45:70 ITEMS
+                  45:70 QUANTITY
+                    45:70 CALL
+                      45:70 NAME 'diag'
+                      45:75 NUMBER '0.0001'
+                      45:83 NUMBER '0.0021'
+                      45:91 NUMBER '0.0021'
+                    45:99 UNIT 'kg-m2'
+          46:5 SCOPE
+            46:5 NAME 'bPiston'
+            46:13 BLOCK
+              46:15 DECLARATION
+                46:15 NAME 'mass'
+                46:21 ITEMS
+                  46:21 QUANTITY
+                    46:21 NUMBER '0.4'
+                    46:25 UNIT 'kg'
+              46:30 DECLARATION
+                46:30 NAME 'cg'
+                46:34 ITEMS
+                  46:34 NAME 'wrist_pin'
+              46:61 DECLARATION
+                46:61 NAME 'inertia'
+                46:70 ITEMS
+                  46:70 QUANTITY
+                    46:70 CALL
+                      46:70 NAME 'diag'
+                      46:75 NUMBER '0.0003'
+                      46:83 NUMBER '0.0003'
+                      46:91 NUMBER '0.0003'
+                    46:99 UNIT 'kg-m2'
+      49:3 SCOPE
+        49:3 NAME 'joints'
+        49:10 BLOCK
+          50:5 DECLARATION
+            50:5 NAME 'jMain'
+            50:13 ITEMS
+              50:13 NAME 'revolute'
+              50:24 PROPERTY
+                50:24 NAME 'at'
+                50:28 NAME 'main_brg'
+              50:39 PROPERTY
+                50:39 NAME 'axis'
+                50:45 LIST
+                  50:46 NUMBER '0'
+                  50:49 NUMBER '1'
+                  50:52 NUMBER '0'
+          51:5 DECLARATION
+            51:5 NAME 'jCrank'
+            51:13 ITEMS
+              51:13 NAME 'spherical'
+              51:24 PROPERTY
+                51:24 NAME 'at'
+                51:28 NAME 'crank_pin'
+          52:5 DECLARATION
+            52:5 NAME 'jWrist'
+            52:13 ITEMS
+              52:13 NAME 'universal'
+              52:24 PROPERTY
+                52:24 NAME 'at'
+                52:28 NAME 'wrist_pin'
+              52:39 PROPERTY
+                52:39 NAME 'axes'
+                52:45 LIST
+                  52:46 NUMBER '0'
+                  52:49 NUMBER '1'
+                  52:52 NUMBER '0'
+              52:56 LIST
+                52:57 NUMBER '0'
+                52:60 NUMBER '0'
+                52:63 NUMBER '1'
+          53:5 DECLARATION
+            53:5 NAME 'jGuide'
+            53:13 ITEMS
+              53:13 NAME 'prismatic'
+              53:24 PROPERTY
+                53:24 NAME 'at'
+                53:28 NAME 'wrist_pin'
+              53:39 PROPERTY
+                53:39 NAME 'axis'
+                53:45 LIST
+                  53:46 NUMBER '1'
+                  53:49 NUMBER '0'
+                  53:52 NUMBER '0'
+      57:3 SCOPE
+        57:3 NAME 'assembly'
+        57:12 BLOCK
+          58:5 CHAIN
+            58:5 NAME 'world'
+            58:11 SLOT
+              58:12 NAME 'jMain'
+            58:20 NAME 'bCrank'
+            58:27 SLOT
+              58:28 NAME 'jCrank'
+            58:36 NAME 'bRod'
+            58:41 SLOT
+              58:42 NAME 'jWrist'
+            58:50 NAME 'bPiston'
+          59:5 CHAIN
+            59:5 NAME 'world'
+            59:11 SLOT
+              59:12 NAME 'jGuide'
+            59:20 NAME 'bPiston'
+      62:3 SCOPE
+        62:3 NAME 'signals'
+        62:11 BLOCK
+          63:5 DEFINITION
+            63:5 NAME 'crank_speed'
+            63:19 ITEMS
+              63:19 QUANTITY
+                63:19 NUMBER '300'
+                63:23 UNIT 'rpm'
+          64:5 DEFINITION
+            64:5 NAME 'piston_x'
+            64:19 ITEMS
+              64:19 ACCESS
+                64:19 ACCESS
+                  64:19 ACCESS
+                    64:19 NAME 'bPiston'
+                    64:27 NAME 'cg'
+                  64:30 NAME 'pos'
+                64:34 NAME 'x'
+      67:3 SCOPE
+        67:3 NAME 'drivers'
+        67:11 BLOCK
+          68:5 DRIVE
+            68:5 ACCESS
+              68:5 ACCESS
+                68:5 NAME 'jMain'
+                68:11 NAME 'angle'
+              68:17 NAME 'vel'
+            68:24 NAME 'crank_speed'
+  74:1 SIMULATION
+    74:12 BLOCK
+      75:3 DECLARATION
+        75:3 NAME 'horizon'
+        75:12 ITEMS
+          75:12 QUANTITY
+            75:12 NUMBER '1'
+            75:14 UNIT 's'
+      76:3 SCOPE
+        76:3 NAME 'outputs'
+        76:11 BLOCK
+          76:13 DECLARATION
+            76:13 NAME 'update'
+            76:21 ITEMS
+              76:21 QUANTITY
+                76:21 NUMBER '1'
+                76:23 UNIT 'ms'
+          76:27 REFERENCE
+            76:27 NAME 'piston_x'

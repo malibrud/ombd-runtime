@@ -6,8 +6,8 @@ rem  Each program is one translation unit, compiled from scratch:
 rem      src\unity.cpp          -^> build\ombdc.exe
 rem      tests\unity_tests.cpp  -^> build\ombdc_tests.exe
 rem  Then the checks run, and any failure fails the build:
-rem      the unit tests and the golden token dumps (tests\*.tokens)
-rem      every .ombd under ..\..\OMBD_Specification\Examples must lex
+rem      the unit tests and the golden dumps (tests\*.tokens, tests\*.ast)
+rem      every .ombd under ..\..\OMBD_Specification\Examples must parse
 rem
 rem      build.bat            release
 rem      build.bat debug      /Od /Zi
@@ -69,10 +69,10 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo === lex every example ===
+echo === parse every example ===
 set FAILED=0
 for /r "%EXAMPLES%" %%f in (*.ombd) do (
-    build\ombdc.exe --tokens "%%f" >nul
+    build\ombdc.exe --ast "%%f" >nul
     if errorlevel 1 (
         set FAILED=1
     ) else (
@@ -80,7 +80,7 @@ for /r "%EXAMPLES%" %%f in (*.ombd) do (
     )
 )
 if not "%FAILED%"=="0" (
-    echo build: AN EXAMPLE FAILED TO LEX
+    echo build: AN EXAMPLE FAILED TO PARSE
     exit /b 1
 )
 

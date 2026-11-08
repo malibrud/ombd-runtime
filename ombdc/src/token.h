@@ -42,18 +42,18 @@ enum TokenKind
     TOK_SLASH,                   // /
     TOK_CARET,                   // ^
 
+    // closer half: legal only as the first half of |] and |> (D168)
+    TOK_BAR,                     // |
+
     // reserved single
     TOK_AT,                      // @   (lexed; any use is a parse error, D141)
 
-    // compound brackets (D114)
+    // compound openers (D114). Closers are never compound: the parser
+    // reads ]] |] |> ]> as two adjacent single tokens (D168).
     TOK_LBRACKET_LBRACKET,       // [[
-    TOK_RBRACKET_RBRACKET,       // ]]
     TOK_LBRACKET_BAR,            // [|
-    TOK_BAR_RBRACKET,            // |]
     TOK_LANGLE_BAR,              // <|
-    TOK_BAR_RANGLE,              // |>
     TOK_LANGLE_LBRACKET,         // <[
-    TOK_RBRACKET_RANGLE,         // ]>
 
     // arrows and range (D114)
     TOK_LANGLE_MINUS_RANGLE,     // <->

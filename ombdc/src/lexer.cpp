@@ -115,9 +115,8 @@ void LexError_print( const Source *source, const LexError *error )
     case LEX_BAD_BACKSLASH:
         fprintf( stderr, "'\\' must be followed by '.', 'x' or '>'" );
         break;
-    case LEX_LONE_BAR_OR_BANG:
-        if ( c == '|' ) fprintf( stderr, "lone '|'; it must begin '|]' or '|>'" );
-        else            fprintf( stderr, "lone '!'; it must begin '!='" );
+    case LEX_LONE_BANG:
+        fprintf( stderr, "lone '!'; it must begin '!='" );
         break;
     case LEX_STRAY_PRIME:
         fprintf( stderr, "''' must end an identifier, as in Y'" );
@@ -141,7 +140,7 @@ static const char *lexErrorKindNames[] =
     "LEX_UNTERMINATED_STRING",
     "LEX_BACKSLASH_IN_STRING",
     "LEX_BAD_BACKSLASH",
-    "LEX_LONE_BAR_OR_BANG",
+    "LEX_LONE_BANG",
     "LEX_STRAY_PRIME",
     "LEX_BAD_PUNCTUATION",
 };
@@ -347,6 +346,11 @@ static bool tryScanToken( Lexer *lex, Token *token )
     case '^': return take( lex, token, TOK_CARET,     1 );
     case '@': return take( lex, token, TOK_AT,        1 );
 
+    // Closers are never compound (D168): the parser reads ]] |] |> ]> as
+    // two adjacent tokens, so ] and | are always one character.
+    case ']': return take( lex, token, TOK_RBRACKET,  1 );
+    case '|': return take( lex, token, TOK_BAR,       1 );
+
     // Comments were skipped already, so this slash starts neither // nor /*.
     case '/': return take( lex, token, TOK_SLASH,     1 );
 
@@ -354,11 +358,6 @@ static bool tryScanToken( Lexer *lex, Token *token )
         if ( t[1] == '[' ) return take( lex, token, TOK_LBRACKET_LBRACKET, 2 );
         if ( t[1] == '|' ) return take( lex, token, TOK_LBRACKET_BAR,      2 );
         return take( lex, token, TOK_LBRACKET, 1 );
-
-    case ']':                                    // ]]  ]>  ]
-        if ( t[1] == ']' ) return take( lex, token, TOK_RBRACKET_RBRACKET, 2 );
-        if ( t[1] == '>' ) return take( lex, token, TOK_RBRACKET_RANGLE,   2 );
-        return take( lex, token, TOK_RBRACKET, 1 );
 
     case '<':                                    // <->  <-  <|  <[  <=  <
         if ( t[1] == '-' )
@@ -375,14 +374,9 @@ static bool tryScanToken( Lexer *lex, Token *token )
         if ( t[1] == '=' ) return take( lex, token, TOK_RANGLE_EQUAL, 2 );
         return take( lex, token, TOK_RANGLE, 1 );
 
-    case '|':                                    // |]  |>
-        if ( t[1] == ']' ) return take( lex, token, TOK_BAR_RBRACKET, 2 );
-        if ( t[1] == '>' ) return take( lex, token, TOK_BAR_RANGLE,   2 );
-        return failAt( lex, LEX_LONE_BAR_OR_BANG, pos );
-
     case '!':                                    // !=
         if ( t[1] == '=' ) return take( lex, token, TOK_BANG_EQUAL, 2 );
-        return failAt( lex, LEX_LONE_BAR_OR_BANG, pos );
+        return failAt( lex, LEX_LONE_BANG, pos );
 
     case '-':                                    // ->  -
         if ( t[1] == '>' ) return take( lex, token, TOK_MINUS_RANGLE, 2 );
