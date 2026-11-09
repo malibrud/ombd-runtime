@@ -10,3 +10,6 @@
 
 # The golden ASTs are compared byte for byte too.
 *.ast text eol=lf
+
+# The golden name dumps too.
+*.names text eol=lf

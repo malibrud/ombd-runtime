@@ -22,11 +22,14 @@ size them. The specification is in the sibling repo `../OMBD_Specification`:
     `MSYS_NO_PATHCONV=1` before calling `wsl.exe --cd /mnt/c/...`.
   - Keep `build.sh` LF and `build.bat` CRLF. `ombdc/.gitattributes` pins both.
   - Keep the two scripts in step when either changes.
-- **Pipeline so far.** `tryReadFile` → `tryLex` → `tryParse`. `ombdc --tokens` and `ombdc --ast`
-  print each stage. The syntax tree is a flat node array linked by index (`src/ast.h`).
+- **Pipeline so far.** `tryReadFile` → `tryLex` → `tryParse` → `tryLoadModel`. `ombdc --tokens`,
+  `--ast` and `--names` print each stage. The syntax tree is a flat node array linked by index
+  (`src/ast.h`); name resolution keeps its results in an array parallel to it (`src/resolve.h`).
+- **The catalog grows with the models** (`src/catalog.cpp`). Only §4.1's built-in names are complete,
+  so until the rest is filled in, `--names` rejects models for types it doesn't know yet.
 - The build fails unless every check passes:
   - `/W4 /WX`;
-  - the unit tests, including the golden dumps `tests\*.tokens` and `tests\*.ast`;
+  - the unit tests, including the golden dumps `tests\*.tokens`, `tests\*.ast` and `tests\*.names`;
   - every `.ombd` under `../OMBD_Specification/Examples` parses.
 - **Unity-build names.** Every `static` shares one translation unit, so module helpers carry a
   prefix (`Parser_peek`), and test helpers `test_`.

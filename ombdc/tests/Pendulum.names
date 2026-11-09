@@ -1,0 +1,30 @@
+root pendulum
+scope TOP: pendulum
+scope SYSTEM pendulum: pivot rod_end bRod jAxle
+scope BODY bRod:
+unit 1
+19:1 PROPERTY gravity
+21:1 SYSTEM pendulum
+23:3 PROPERTY units
+26:3 SECTION points
+27:5 VALUE pivot
+28:5 VALUE rod_end
+32:3 SECTION bodies
+35:5 BODY bRod
+36:7 PROPERTY mass
+37:7 PROPERTY cg
+37:16 FUNCTION mid -> BUILTIN_FUNCTION
+37:20 REFERENCE pivot -> VALUE 27:5
+37:27 REFERENCE rod_end -> VALUE 28:5
+38:7 PROPERTY inertia
+38:16 FUNCTION diag -> BUILTIN_FUNCTION
+43:3 SECTION joints
+45:5 INSTANCE jAxle : revolute
+45:12 TYPE revolute -> BUILTIN_TYPE
+45:22 PROPERTY at
+45:26 REFERENCE pivot -> VALUE 27:5
+45:33 PROPERTY axis
+49:3 SECTION assembly
+50:5 REFERENCE world -> BUILTIN_VALUE
+50:12 CONNECTOR jAxle -> INSTANCE 45:5
+50:19 REFERENCE bRod -> BODY 35:5

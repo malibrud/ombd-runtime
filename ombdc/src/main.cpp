@@ -1,9 +1,10 @@
 // main.cpp -- the ombdc driver.
 //
-//     ombdc --tokens file.ombd    lex the file and print one token per line
-//     ombdc --ast file.ombd       parse the file and print its syntax tree
+//     ombdc --tokens file.ombd       lex the file and print one token per line
+//     ombdc --ast file.ombd          parse the file and print its syntax tree
+//     ombdc --names file.ombd ...    load the files as one model and print its names
 //
-// Exit status: 0 on success, 1 on an error in the file, 2 on bad arguments.
+// Exit status: 0 on success, 1 on an error in a file, 2 on bad arguments.
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -16,11 +17,13 @@
 #include "file.h"
 #include "lexer.h"
 #include "parser.h"
+#include "resolve.h"
 
 static void printUsage( void )
 {
     fprintf( stderr, "usage: ombdc --tokens file.ombd\n"
-                     "       ombdc --ast file.ombd\n" );
+                     "       ombdc --ast file.ombd\n"
+                     "       ombdc --names file.ombd ...\n" );
 }
 
 // Write a dump to stdout as-is.
@@ -45,56 +48,118 @@ static char *allocateDump( uint32_t size )
     return dump;
 }
 
-int main( int argc, char *argv[] )
+// Read and lex one file.
+static bool tryLexFile( const char *path, Source *source, TokenArray *tokens )
 {
-    bool printTokens = argc == 3 && strcmp( argv[1], "--tokens" ) == 0;
-    bool printAst    = argc == 3 && strcmp( argv[1], "--ast" ) == 0;
-    if ( !printTokens && !printAst )
+    if ( !tryReadFile( path, source ) ) return false;
+
+    LexError error;
+    if ( !tryLex( source, tokens, &error ) )
     {
-        printUsage();
-        return 2;
+        LexError_print( source, &error );
+        Source_free( source );
+        return false;
     }
+    return true;
+}
 
-    Source source;
-    if ( !tryReadFile( argv[2], &source ) ) return 1;
+// Read, lex and parse one file.
+static bool tryParseFile( const char *path, Source *source, TokenArray *tokens, Ast *ast )
+{
+    if ( !tryLexFile( path, source, tokens ) ) return false;
 
+    ParseError error;
+    if ( !tryParse( source, tokens, ast, &error ) )
+    {
+        ParseError_print( source, &error );
+        TokenArray_free( tokens );
+        Source_free( source );
+        return false;
+    }
+    return true;
+}
+
+static int printTokens( const char *path )
+{
+    Source     source;
     TokenArray tokens;
-    LexError   lexError;
-    if ( !tryLex( &source, &tokens, &lexError ) )
-    {
-        LexError_print( &source, &lexError );
-        Source_free( &source );
-        return 1;
-    }
+    if ( !tryLexFile( path, &source, &tokens ) ) return 1;
 
-    if ( printTokens )
-    {
-        uint32_t size = TokenArray_format( &tokens, source.text, NULL, 0 );
-        char    *dump = allocateDump( size );
-        TokenArray_format( &tokens, source.text, dump, size + 1 );
-        writeDump( dump, size );
-        free( dump );
-    }
-    else
-    {
-        Ast        ast;
-        ParseError parseError;
-        if ( !tryParse( &source, &tokens, &ast, &parseError ) )
-        {
-            ParseError_print( &source, &parseError );
-            TokenArray_free( &tokens );
-            Source_free( &source );
-            return 1;
-        }
-        uint32_t size = Ast_format( &ast, &tokens, source.text, NULL, 0 );
-        char    *dump = allocateDump( size );
-        Ast_format( &ast, &tokens, source.text, dump, size + 1 );
-        writeDump( dump, size );
-        free( dump );
-        Ast_free( &ast );
-    }
+    uint32_t size = TokenArray_format( &tokens, source.text, NULL, 0 );
+    char    *dump = allocateDump( size );
+    TokenArray_format( &tokens, source.text, dump, size + 1 );
+    writeDump( dump, size );
 
+    free( dump );
     TokenArray_free( &tokens );
     Source_free( &source );
     return 0;
+}
+
+static int printAst( const char *path )
+{
+    Source     source;
+    TokenArray tokens;
+    Ast        ast;
+    if ( !tryParseFile( path, &source, &tokens, &ast ) ) return 1;
+
+    uint32_t size = Ast_format( &ast, &tokens, source.text, NULL, 0 );
+    char    *dump = allocateDump( size );
+    Ast_format( &ast, &tokens, source.text, dump, size + 1 );
+    writeDump( dump, size );
+
+    free( dump );
+    Ast_free( &ast );
+    TokenArray_free( &tokens );
+    Source_free( &source );
+    return 0;
+}
+
+static int printNames( char **paths, uint32_t count )
+{
+    Unit *units = (Unit *)calloc( count, sizeof( Unit ) );
+    if ( units == NULL )
+    {
+        fprintf( stderr, "ombdc: out of memory\n" );
+        return 1;
+    }
+
+    for ( uint32_t i = 0 ; i < count ; i++ )
+    {
+        if ( !tryParseFile( paths[i], &units[i].source, &units[i].tokens, &units[i].ast ) ) return 1;
+    }
+
+    Model     model;
+    LoadError error;
+    if ( !tryLoadModel( units, count, &model, &error ) )
+    {
+        LoadError_print( units, &error );
+        return 1;
+    }
+
+    uint32_t size = Model_format( &model, NULL, 0 );
+    char    *dump = allocateDump( size );
+    Model_format( &model, dump, size + 1 );
+    writeDump( dump, size );
+
+    free( dump );
+    Model_free( &model );
+    for ( uint32_t i = 0 ; i < count ; i++ )
+    {
+        Ast_free( &units[i].ast );
+        TokenArray_free( &units[i].tokens );
+        Source_free( &units[i].source );
+    }
+    free( units );
+    return 0;
+}
+
+int main( int argc, char *argv[] )
+{
+    if ( argc == 3 && strcmp( argv[1], "--tokens" ) == 0 ) return printTokens( argv[2] );
+    if ( argc == 3 && strcmp( argv[1], "--ast" ) == 0 )    return printAst( argv[2] );
+    if ( argc >= 3 && strcmp( argv[1], "--names" ) == 0 )  return printNames( &argv[2], (uint32_t)( argc - 2 ) );
+
+    printUsage();
+    return 2;
 }
