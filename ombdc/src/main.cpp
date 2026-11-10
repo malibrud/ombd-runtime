@@ -4,6 +4,7 @@
 //     ombdc --ast file.ombd          parse the file and print its syntax tree
 //     ombdc --names file.ombd ...    load the files as one model and print its names
 //     ombdc --types file.ombd ...    load and type-check them, and print every value's type
+//     ombdc --assembly file.ombd ... load and check them through §3.7, and print the links
 //
 // Exit status: 0 on success, 1 on an error in a file, 2 on bad arguments.
 
@@ -20,13 +21,15 @@
 #include "parser.h"
 #include "resolve.h"
 #include "types.h"
+#include "assembly.h"
 
 static void printUsage( void )
 {
     fprintf( stderr, "usage: ombdc --tokens file.ombd\n"
                      "       ombdc --ast file.ombd\n"
                      "       ombdc --names file.ombd ...\n"
-                     "       ombdc --types file.ombd ...\n" );
+                     "       ombdc --types file.ombd ...\n"
+                     "       ombdc --assembly file.ombd ...\n" );
 }
 
 // Write a dump to stdout as-is.
@@ -118,9 +121,17 @@ static int printAst( const char *path )
     return 0;
 }
 
-// Load the files as one model, then type-check it if `checkTypes`, and print
-// the dump of the last stage that ran.
-static int printModel( char **paths, uint32_t count, bool checkTypes )
+// How far printModel takes a model, and so which dump it prints.
+enum ModelStage
+{
+    STAGE_NAMES,                 // tryLoadModel
+    STAGE_TYPES,                 // then tryCheckTypes
+    STAGE_ASSEMBLY,              // then tryCheckAssembly
+};
+
+// Load the files as one model, run the stages up to `stage`, and print the
+// dump of the last one.
+static int printModel( char **paths, uint32_t count, ModelStage stage )
 {
     Unit *units = (Unit *)calloc( count, sizeof( Unit ) );
     if ( units == NULL )
@@ -141,16 +152,31 @@ static int printModel( char **paths, uint32_t count, bool checkTypes )
         LoadError_print( units, &error );
         return 1;
     }
-    if ( checkTypes && !tryCheckTypes( &model, &error ) )
+    if ( stage >= STAGE_TYPES && !tryCheckTypes( &model, &error ) )
+    {
+        LoadError_print( units, &error );
+        return 1;
+    }
+    if ( stage >= STAGE_ASSEMBLY && !tryCheckAssembly( &model, &error ) )
     {
         LoadError_print( units, &error );
         return 1;
     }
 
-    uint32_t size = checkTypes ? Model_formatTypes( &model, NULL, 0 ) : Model_format( &model, NULL, 0 );
-    char    *dump = allocateDump( size );
-    if ( checkTypes ) Model_formatTypes( &model, dump, size + 1 );
-    else              Model_format( &model, dump, size + 1 );
+    uint32_t size = 0;
+    switch ( stage )
+    {
+    case STAGE_NAMES:    size = Model_format( &model, NULL, 0 );         break;
+    case STAGE_TYPES:    size = Model_formatTypes( &model, NULL, 0 );    break;
+    case STAGE_ASSEMBLY: size = Model_formatAssembly( &model, NULL, 0 ); break;
+    }
+    char *dump = allocateDump( size );
+    switch ( stage )
+    {
+    case STAGE_NAMES:    Model_format( &model, dump, size + 1 );         break;
+    case STAGE_TYPES:    Model_formatTypes( &model, dump, size + 1 );    break;
+    case STAGE_ASSEMBLY: Model_formatAssembly( &model, dump, size + 1 ); break;
+    }
     writeDump( dump, size );
 
     free( dump );
@@ -169,8 +195,9 @@ int main( int argc, char *argv[] )
 {
     if ( argc == 3 && strcmp( argv[1], "--tokens" ) == 0 ) return printTokens( argv[2] );
     if ( argc == 3 && strcmp( argv[1], "--ast" ) == 0 )    return printAst( argv[2] );
-    if ( argc >= 3 && strcmp( argv[1], "--names" ) == 0 )  return printModel( &argv[2], (uint32_t)( argc - 2 ), false );
-    if ( argc >= 3 && strcmp( argv[1], "--types" ) == 0 )  return printModel( &argv[2], (uint32_t)( argc - 2 ), true );
+    if ( argc >= 3 && strcmp( argv[1], "--names" ) == 0 )    return printModel( &argv[2], (uint32_t)( argc - 2 ), STAGE_NAMES );
+    if ( argc >= 3 && strcmp( argv[1], "--types" ) == 0 )    return printModel( &argv[2], (uint32_t)( argc - 2 ), STAGE_TYPES );
+    if ( argc >= 3 && strcmp( argv[1], "--assembly" ) == 0 ) return printModel( &argv[2], (uint32_t)( argc - 2 ), STAGE_ASSEMBLY );
 
     printUsage();
     return 2;

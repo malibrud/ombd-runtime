@@ -195,17 +195,17 @@ static LoadCase loadCases[] =
       "SYSTEM s@top VALUE r@s VALUE q@s VALUE t@s", "q->VALUE@s" },
 
     // bodies: lookup runs outward, and an inner name hides an outer one
-    { "system s {\nbodies { b { cg: p; } }\npoints { p = (0, 0, 0); }\n}", NULL, "s",
+    { "system s {\nbodies { b { cg: p; mass: 1; inertia: 1; } }\npoints { p = (0, 0, 0); }\n}", NULL, "s",
       "SYSTEM s@top BODY b@s VALUE p@s", "p->VALUE@s" },
-    { "system s {\nbodies { b { points { q = (0, 0, 0); } cg: q; } }\n}", NULL, "s",
+    { "system s {\nbodies { b { points { q = (0, 0, 0); } cg: q; mass: 1; inertia: 1; } }\n}", NULL, "s",
       "SYSTEM s@top BODY b@s VALUE q@b", "q->VALUE@b" },
-    { "system s {\np = 1;\nbodies { b { points { p = 2; } cg: p; } }\n}", NULL, "s",
+    { "system s {\np = 1;\nbodies { b { points { p = 2; } cg: p; mass: 1; inertia: 1; } }\n}", NULL, "s",
       "SYSTEM s@top VALUE p@s BODY b@s VALUE p@b", "p->VALUE@b" },
-    { "system s {\nbodies { a { } b { } }\n}", NULL, "s", "SYSTEM s@top BODY a@s BODY b@s", "" },
+    { "system s {\nbodies { a { mass: 1; cg: (0, 0, 0); inertia: 1; } b { mass: 1; cg: (0, 0, 0); inertia: 1; } }\n}", NULL, "s", "SYSTEM s@top BODY a@s BODY b@s", "" },
 
     // properties of each element
     { "system s {\nunits: m, kg;\n}", NULL, "s", "SYSTEM s@top", "" },
-    { "system s {\nbodies { b { mass: 10 kg; inertia: diag(1, 2, 3) kg-m2; } }\n}", NULL, "s",
+    { "system s {\nbodies { b { mass: 10 kg; inertia: diag(1, 2, 3) kg-m2; cg: (0, 0, 0) m; } }\n}", NULL, "s",
       "SYSTEM s@top BODY b@s", "diag->BUILTIN_FUNCTION@builtin" },
 
     // instances of a built-in type, in line and block form (D152)
@@ -243,14 +243,14 @@ static LoadCase loadCases[] =
       "SYSTEM s@top VALUE a@s VALUE b@s VALUE c@s VALUE o@s", "a->VALUE@s b->VALUE@s c->VALUE@s" },
 
     // only a path's first name is resolved so far
-    { "system s {\nbodies { b { } }\nx = b.cg.pos.x;\n}", NULL, "s", "SYSTEM s@top BODY b@s VALUE x@s", "b->BODY@s" },
+    { "system s {\nbodies { b { mass: 1; cg: (0, 0, 0); inertia: 1; } }\nx = b.cg.pos.x;\n}", NULL, "s", "SYSTEM s@top BODY b@s VALUE x@s", "b->BODY@s" },
 
     // drives, bare references and chains
     { "system s {\nj: revolute, at: a, axis: a;\na = 1;\nj.angle.pos <- a;\n}", NULL, "s",
       "SYSTEM s@top INSTANCE j@s:revolute VALUE a@s",
       "revolute->BUILTIN_TYPE@builtin a->VALUE@s a->VALUE@s j->INSTANCE@s a->VALUE@s" },
     { "system s {\noutputs_x = 1;\nsignals { outputs_x; }\n}", NULL, "s", "SYSTEM s@top VALUE outputs_x@s", "outputs_x->VALUE@s" },
-    { "system s {\na = 1;\nj: revolute, at: a, axis: a;\nbodies { b { } }\nassembly { world <j> b; }\n}", NULL, "s",
+    { "system s {\na = 1;\nj: revolute, at: a, axis: a;\nbodies { b { mass: 1; cg: (0, 0, 0); inertia: 1; } }\nassembly { world <j> b; }\n}", NULL, "s",
       "SYSTEM s@top VALUE a@s INSTANCE j@s:revolute BODY b@s",
       "revolute->BUILTIN_TYPE@builtin a->VALUE@s a->VALUE@s world->BUILTIN_VALUE@builtin j->INSTANCE@s b->BODY@s" },
 };
@@ -400,6 +400,16 @@ static LoadErrorCase loadErrorCases[] =
     { "system s {\na = 1;\nc = TSDA, rate: 1;\nj: c, rate: 2, p1: a;\n}", NULL, 0, 4, 7, "must not restate it" },
     { "system s {\na = 1;\nj: revolute { nosuch: a; }\n}", NULL, 0, 3, 15, "'nosuch' is not a property of revolute" },
     { "system s {\na = 1;\nj: revolute { p = 2; }\n}", NULL, 0, 3, 15, "not implemented yet: a statement other than" },
+
+    // required properties, reported at the element's name after every other load error (§4, D161)
+    { "system s {\nbodies { b { } }\n}", NULL,       0, 2, 10, "'b' is missing the required property 'mass'" },
+    { "system s {\nbodies { b { mass: 1; inertia: 1; } }\n}", NULL, 0, 2, 10, "'b' is missing the required property 'cg'" },
+    { "system s {\nbodies { b { mass: 1; points { cg: 0; } } }\n}", NULL, 0, 2, 10, "'b' is missing the required property 'inertia'" },
+    { "system s {\na = 1;\nj: revolute, at: a;\n}", NULL, 0, 3, 1, "'j' is missing the required property 'axis'" },
+    { "system s {\na = 1;\nj: revolute { axis: a; }\n}", NULL, 0, 3, 1, "'j' is missing the required property 'at'" },
+    { "system s {\na = 1;\nc: TSDA, rate: 1, free: 2, p1: a;\n}", NULL, 0, 3, 1, "'c' is missing the required property 'p2'" },
+    { "system s {\na = 1;\ncoil = TSDA, rate: 1, free: 2;\nc: coil, p1: a;\n}", NULL, 0, 4, 1, "'c' is missing the required property 'p2'" },
+    { "system s {\nbodies { b { } }\nx = nosuch;\n}", NULL, 0, 3, 5, "unknown name 'nosuch'" },
 
     // lookup (§3.2, D2, D144)
     { "system s {\nx = nosuch;\n}", NULL,            0, 2, 5,  "unknown name 'nosuch'" },

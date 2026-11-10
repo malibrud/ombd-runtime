@@ -16,3 +16,6 @@
 
 # And the golden type dumps.
 *.types text eol=lf
+
+# And the golden assembly dumps.
+*.assembly text eol=lf

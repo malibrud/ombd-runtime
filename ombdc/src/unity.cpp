@@ -13,4 +13,5 @@
 #include "catalog.cpp"
 #include "resolve.cpp"
 #include "types.cpp"
+#include "assembly.cpp"
 #include "main.cpp"

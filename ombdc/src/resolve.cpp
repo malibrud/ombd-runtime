@@ -1,11 +1,12 @@
 // resolve.cpp -- loading: merging texts and resolving names (Specification.md §3.1–§3.3).
 //
-// Four passes over the parsed units, each stopping at the first error:
+// Five passes over the parsed units, each stopping at the first error:
 //
 //   1. tryMerge     unite namespaces, take `gravity` and `simulation`, find the root
 //   2. tryDeclare   walk the systems: flatten sections, enter every name in its scope
 //   3. tryClassify  with every name known, say what each `=` and `:` statement is
 //   4. tryResolve   look up every remaining name in the space its position selects
+//   5. tryRequire   check that every element sets its required properties (§4)
 //
 // Declarations are order-independent (§0), which is why declaring comes first.
 //
@@ -1157,6 +1158,117 @@ static bool tryResolve( Loader *l )
 }
 
 //////////////////////////////////////////////////////////////////////////////
+// Pass 5: required properties (§4, D161)
+//////////////////////////////////////////////////////////////////////////////
+
+// Which of an element's properties are set, by index.
+struct SetProperties
+{
+    bool set[ CATALOG_MAX_PROPERTIES ];
+};
+
+// A node that binds a property of `element` marks it as set.
+static void Loader_markProperty( Loader *l, uint32_t unit, uint32_t node, const ElementInfo *element, SetProperties *set )
+{
+    const NodeInfo *info = Loader_info( l, unit, node );
+    if ( info->role != ROLE_PROPERTY || info->property == NULL ) return;
+
+    const PropertyInfo *first = element->properties;
+    if ( info->property >= first && info->property < first + element->propertyCount ) set->set[ info->property - first ] = true;
+}
+
+// The `key: value;` statements of a block, looking into its sections, which
+// are not scopes (D22).
+static void Loader_markBlock( Loader *l, uint32_t unit, uint32_t block, const ElementInfo *element, SetProperties *set )
+{
+    for ( uint32_t s = Loader_child( l, unit, block ) ; s != 0 ; s = Loader_next( l, unit, s ) )
+    {
+        if ( Loader_kind( l, unit, s ) == NODE_SCOPE && Loader_info( l, unit, s )->role == ROLE_SECTION )
+        {
+            Loader_markBlock( l, unit, Loader_next( l, unit, Loader_child( l, unit, s ) ), element, set );
+            continue;
+        }
+        Loader_markProperty( l, unit, s, element, set );
+    }
+}
+
+// What follows an element's head: a typed block, or `name: value` items.
+static void Loader_markValue( Loader *l, uint32_t unit, uint32_t value, const ElementInfo *element, SetProperties *set )
+{
+    uint32_t rest = Loader_next( l, unit, Loader_child( l, unit, value ) );
+    if ( Loader_kind( l, unit, value ) == NODE_TYPED_BLOCK )
+    {
+        Loader_markBlock( l, unit, rest, element, set );
+        return;
+    }
+    for ( uint32_t item = rest ; item != 0 ; item = Loader_next( l, unit, item ) ) Loader_markProperty( l, unit, item, element, set );
+}
+
+// Every required property that `mode` answers for must be set: a definition
+// answers for its law, an instance of a definition for its placement, and
+// anything else for all of them (D152).
+static bool tryCheckRequired( Loader *l, uint32_t symbol, const ElementInfo *element, BindMode mode, const SetProperties *set )
+{
+    const Symbol *s = &l->model->symbols[ symbol ];
+    for ( uint32_t i = 0 ; i < element->propertyCount ; i++ )
+    {
+        const PropertyInfo *property = &element->properties[i];
+        if ( property->requirement != REQ_REQUIRED || set->set[i] ) continue;
+        if ( mode == BIND_DEFINITION    && !property->law ) continue;
+        if ( mode == BIND_OF_DEFINITION &&  property->law ) continue;
+
+        return Loader_failAt( l, s->unit, s->token, "'%.*s' is missing the required property '%s' (§4)",
+                              (int)s->length, s->name, property->name );
+    }
+    return true;
+}
+
+// Each system, body, definition and instance, in the order they were declared.
+static bool tryRequire( Loader *l )
+{
+    Model *m = l->model;
+    for ( uint32_t s = 1 ; s < m->symbolCount ; s++ )
+    {
+        SymbolKind kind = m->symbols[ s ].kind;
+        if ( kind != SYM_SYSTEM && kind != SYM_BODY && kind != SYM_DEFINITION && kind != SYM_INSTANCE ) continue;
+
+        uint32_t      unit  = m->symbols[ s ].unit;
+        uint32_t      first = Loader_child( l, unit, m->symbols[ s ].node );    // the name or the key
+        uint32_t      rest  = Loader_next( l, unit, first );                    // the block or the value
+        SetProperties set   = {};
+
+        switch ( kind )
+        {
+        case SYM_SYSTEM:
+            Loader_markBlock( l, unit, rest, &Catalog_system, &set );
+            if ( !tryCheckRequired( l, s, &Catalog_system, BIND_ANY, &set ) ) return false;
+            break;
+
+        case SYM_BODY:
+            Loader_markBlock( l, unit, rest, &Catalog_body, &set );
+            if ( !tryCheckRequired( l, s, &Catalog_body, BIND_ANY, &set ) ) return false;
+            break;
+
+        case SYM_DEFINITION:
+            Loader_markValue( l, unit, rest, m->symbols[ s ].type, &set );
+            if ( !tryCheckRequired( l, s, m->symbols[ s ].type, BIND_DEFINITION, &set ) ) return false;
+            break;
+
+        default:                                                 // an instance
+        {
+            uint32_t head = Loader_child( l, unit, rest );
+            uint32_t type = Loader_info( l, unit, head )->symbol;
+            BindMode mode = m->symbols[ type ].kind == SYM_DEFINITION ? BIND_OF_DEFINITION : BIND_ANY;
+            Loader_markValue( l, unit, rest, m->symbols[ s ].type, &set );
+            if ( !tryCheckRequired( l, s, m->symbols[ s ].type, mode, &set ) ) return false;
+            break;
+        }
+        }
+    }
+    return true;
+}
+
+//////////////////////////////////////////////////////////////////////////////
 // Public API
 //////////////////////////////////////////////////////////////////////////////
 
@@ -1182,6 +1294,8 @@ static void Model_init( Model *m, Unit *units, uint32_t unitCount )
     m->gravityNode    = 0;
     m->simulationUnit = 0;
     m->simulationNode = 0;
+    m->links          = NULL;
+    m->linkCount      = 0;
 
     Model_addScope( m, SCOPE_BUILTIN, 0, 0, NULL );              // SCOPE_INDEX_BUILTIN
     Model_addScope( m, SCOPE_TOP, SCOPE_INDEX_BUILTIN, 0, &Catalog_topLevel );   // SCOPE_INDEX_TOP
@@ -1223,7 +1337,8 @@ bool tryLoadModel( Unit *units, uint32_t unitCount, Model *model, LoadError *err
     loader.model = model;
     loader.error = error;
 
-    if ( !tryMerge( &loader ) || !tryDeclare( &loader ) || !tryClassify( &loader ) || !tryResolve( &loader ) )
+    if ( !tryMerge( &loader ) || !tryDeclare( &loader ) || !tryClassify( &loader ) || !tryResolve( &loader )
+         || !tryRequire( &loader ) )
     {
         Model_free( model );
         return false;
@@ -1242,10 +1357,13 @@ void Model_free( Model *model )
     }
     free( model->symbols );
     free( model->scopes );
+    free( model->links );
     model->symbols     = NULL;
     model->scopes      = NULL;
+    model->links       = NULL;
     model->symbolCount = 0;
     model->scopeCount  = 0;
+    model->linkCount   = 0;
 }
 
 void LoadError_print( const Unit *units, const LoadError *error )

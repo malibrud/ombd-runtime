@@ -52,13 +52,29 @@ enum ExpectedDimension
     DIM_COUNT                    // the number of entries; not an entry
 };
 
+// Whether an element must set a property (§4's "Req." column, D161).
+enum Requirement
+{
+    REQ_OPTIONAL,                // a method choice or an optional contribution
+    REQ_REQUIRED,                // a defining parameter
+};
+
 struct PropertyInfo
 {
     const char       *name;
     ValueSpace        space;
     bool              law;       // law (true) or placement (false), for a type that can be defined (D152)
+    Requirement       requirement;
     ValueType         type;      // TYPE_NONE when `space` is not VALUE_EXPRESSION
     ExpectedDimension dimension;
+};
+
+// What one end of a connector attaches to (§3.7, D50, D52). Shafts and
+// ports join when the driveline does.
+enum EndpointKind
+{
+    ENDPOINT_NONE,
+    ENDPOINT_BODY,               // a body, or `world`
 };
 
 // A built-in value (§4.1). `world` is not a number of any kind: its type is TYPE_NONE.
@@ -70,12 +86,15 @@ struct BuiltinValue
 };
 
 // Anything that has properties: a built-in type, or the top level, a system
-// or a body, whose statements are checked the same way.
+// or a body, whose statements are checked the same way. A connector is an
+// element with an endpoint signature, listed in endpoint order (D159).
 struct ElementInfo
 {
     const char         *name;
     const PropertyInfo *properties;
     uint32_t            propertyCount;
+    uint32_t            endpointCount;   // 2 for a connector, else 0
+    EndpointKind        endpoints[2];
 };
 
 // No element has more properties than this.

@@ -372,8 +372,8 @@ static TypeErrorCase typeErrorCases[] =
     // a value with no unit (D147)
     { "system s {\np = (0, 0, 0);\n}",                             2, 5,  "no 'units:' default applies to dimension L" },
     { "system s {\nunits: kg;\np = (0, 0, 0);\n}",                 3, 5,  "no 'units:' default applies to dimension L" },
-    { "system s {\nbodies { b { mass: 10; } }\n}",                 2, 20, "no 'units:' default applies to dimension M" },
-    { "system s {\nunits: m, kg;\nbodies { b { inertia: diag(1, 2, 3); } }\n}", 3, 23, "must carry a unit" },
+    { "system s {\nbodies { b { mass: 10; cg: (0, 0, 0) m; inertia: diag(1, 1, 1) kg-m2; } }\n}",                 2, 20, "no 'units:' default applies to dimension M" },
+    { "system s {\nunits: m, kg;\nbodies { b { inertia: diag(1, 2, 3); mass: 1; cg: (0, 0, 0); } }\n}", 3, 23, "must carry a unit" },
     { "gravity: [0, 0, -9.81];\nsystem s { }",                     1, 10, "must carry a unit" },
     { "system s {\nc = TSDA, rate: 10;\n}",                        2, 17, "must carry a unit" },
 
@@ -381,7 +381,7 @@ static TypeErrorCase typeErrorCases[] =
     { "system s {\nx = 5 furlong;\n}",                             2, 7,  "unknown unit 'furlong'" },
     { "system s {\nx = 5 m-x;\n}",                                 2, 9,  "unknown unit 'x'" },
     { "system s {\nx = 5 lb;\n}",                                  2, 7,  "needs an expected dimension" },
-    { "system s {\nbodies { b { cg: (0, 0, 0) lb; } }\n}",         2, 28, "fits neither mass nor force" },
+    { "system s {\nbodies { b { cg: (0, 0, 0) lb; mass: 1 kg; inertia: diag(1, 1, 1) kg-m2; } }\n}",         2, 28, "fits neither mass nor force" },
 
     // a point is a length
     { "system s {\np = (0, 0, 0) kg;\n}",                          2, 15, "a point is a length" },
@@ -402,14 +402,14 @@ static TypeErrorCase typeErrorCases[] =
     { "system s {\nx = 1 N + 1;\n}",                               2, 11, "must carry a unit" },
 
     // a value's meaning is fixed where it's defined
-    { "system s {\nx = 5;\nbodies { b { mass: x; } }\n}",          3, 20, "'mass' takes dimension M, and this has dimension 1" },
+    { "system s {\nx = 5;\nbodies { b { mass: x; cg: (0, 0, 0) m; inertia: diag(1, 1, 1) kg-m2; } }\n}",          3, 20, "'mass' takes dimension M, and this has dimension 1" },
 
     // properties against the catalog (§4)
-    { "system s {\nbodies { b { mass: 10 N; } }\n}",               2, 20, "'mass' takes dimension M, and this has dimension L M T-2" },
-    { "system s {\nbodies { b { cg: [0, 0, 0] m; } }\n}",          2, 18, "'cg' takes a point, and this is a list[3]" },
+    { "system s {\nbodies { b { mass: 10 N; cg: (0, 0, 0) m; inertia: diag(1, 1, 1) kg-m2; } }\n}",               2, 20, "'mass' takes dimension M, and this has dimension L M T-2" },
+    { "system s {\nbodies { b { cg: [0, 0, 0] m; mass: 1 kg; inertia: diag(1, 1, 1) kg-m2; } }\n}",          2, 18, "'cg' takes a point, and this is a list[3]" },
     { "system s {\nunits: m;\nj: revolute, at: (0, 0, 0), axis: (0, 1, 0);\n}", 3, 35, "'axis' takes a vector, and this is a point" },
     { "system s {\nunits: m;\nj: revolute, at: (0, 0, 0), axis: [0, 1];\n}", 3, 35, "'axis' takes a vector, and this is a list[2]" },
-    { "system s {\nbodies { b { inertia: [[1 0; 0 1]] kg-m2; } }\n}", 2, 23, "'inertia' takes a matrix, and this is a grid[2x2]" },
+    { "system s {\nbodies { b { inertia: [[1 0; 0 1]] kg-m2; mass: 1 kg; cg: (0, 0, 0) m; } }\n}", 2, 23, "'inertia' takes a matrix, and this is a grid[2x2]" },
 
     // functions (§4.1)
     { "system s {\nx = sin(2 * pi);\n}",                           2, 9,  "'sin' takes dimension A here, and this has dimension 1" },
@@ -437,9 +437,9 @@ static TypeErrorCase typeErrorCases[] =
 
     // not implemented yet
     { "system s {\nunits: m;\ny = 1 m;\nx = (y, 0, 0);\n}",        4, 6,  "not implemented yet: an entry with a dimension" },
-    { "system s {\nbodies { b { } }\nx = b;\n}",                   3, 5,  "not implemented yet: 'b' used as a value" },
+    { "system s {\nbodies { b { mass: 1 kg; cg: (0, 0, 0) m; inertia: diag(1, 1, 1) kg-m2; } }\nx = b;\n}",                   3, 5,  "not implemented yet: 'b' used as a value" },
     { "system s {\nx = world;\n}",                                 2, 5,  "not implemented yet: 'world' used as a value" },
-    { "system s {\nbodies { b { } }\nx = b.cg;\n}",                3, 5,  "not implemented yet: the type of a ACCESS" },
+    { "system s {\nbodies { b { mass: 1 kg; cg: (0, 0, 0) m; inertia: diag(1, 1, 1) kg-m2; } }\nx = b.cg;\n}",                3, 5,  "not implemented yet: the type of a ACCESS" },
     { "system s {\nx = <1>;\n}",                                   2, 5,  "not implemented yet: the type of a QUATERNION" },
     { "system s {\na = 1;\nj.angle.pos <- a;\nj: revolute, at: a, axis: a;\n}", 3, 1, "not implemented yet: the type of a driver" },
     { "system s {\na = 1;\nsignals { a; }\n}",                     3, 11, "not implemented yet: the type of a bare reference" },

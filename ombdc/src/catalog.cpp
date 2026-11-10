@@ -11,34 +11,34 @@
 
 static const PropertyInfo catalogTopLevelProperties[] =
 {
-    { "gravity", VALUE_EXPRESSION, false, TYPE_VECTOR, DIM_ACCELERATION },   // §4.11
+    { "gravity", VALUE_EXPRESSION, false, REQ_OPTIONAL, TYPE_VECTOR, DIM_ACCELERATION },   // §4.11
 };
 
 static const PropertyInfo catalogSystemProperties[] =
 {
-    { "units", VALUE_UNIT, false, TYPE_NONE, DIM_NONE }, // §3.5
+    { "units", VALUE_UNIT, false, REQ_OPTIONAL, TYPE_NONE, DIM_NONE }, // §3.5
 };
 
 static const PropertyInfo catalogBodyProperties[] =      // §4.2
 {
-    { "mass",    VALUE_EXPRESSION, false, TYPE_SCALAR, DIM_MASS    },
-    { "cg",      VALUE_EXPRESSION, false, TYPE_POINT,  DIM_LENGTH  },
-    { "inertia", VALUE_EXPRESSION, false, TYPE_MATRIX, DIM_INERTIA },
+    { "mass",    VALUE_EXPRESSION, false, REQ_REQUIRED, TYPE_SCALAR, DIM_MASS    },
+    { "cg",      VALUE_EXPRESSION, false, REQ_REQUIRED, TYPE_POINT,  DIM_LENGTH  },
+    { "inertia", VALUE_EXPRESSION, false, REQ_REQUIRED, TYPE_MATRIX, DIM_INERTIA },
 };
 
 static const PropertyInfo catalogRevoluteProperties[] =  // §4.3: every joint property is placement
 {
-    { "at",   VALUE_EXPRESSION, false, TYPE_POINT,  DIM_LENGTH },
-    { "axis", VALUE_EXPRESSION, false, TYPE_VECTOR, DIM_ANY    },
+    { "at",   VALUE_EXPRESSION, false, REQ_REQUIRED, TYPE_POINT,  DIM_LENGTH },
+    { "axis", VALUE_EXPRESSION, false, REQ_REQUIRED, TYPE_VECTOR, DIM_ANY    },
 };
 
 static const PropertyInfo catalogTsdaProperties[] =      // §4.4
 {
-    { "rate",    VALUE_EXPRESSION, true,  TYPE_SCALAR, DIM_STIFFNESS },
-    { "damping", VALUE_EXPRESSION, true,  TYPE_SCALAR, DIM_DAMPING   },
-    { "free",    VALUE_EXPRESSION, true,  TYPE_SCALAR, DIM_LENGTH    },
-    { "p1",      VALUE_EXPRESSION, false, TYPE_POINT,  DIM_LENGTH    },
-    { "p2",      VALUE_EXPRESSION, false, TYPE_POINT,  DIM_LENGTH    },
+    { "rate",    VALUE_EXPRESSION, true,  REQ_OPTIONAL, TYPE_SCALAR, DIM_STIFFNESS },   // D158 is not checked yet
+    { "damping", VALUE_EXPRESSION, true,  REQ_OPTIONAL, TYPE_SCALAR, DIM_DAMPING   },
+    { "free",    VALUE_EXPRESSION, true,  REQ_OPTIONAL, TYPE_SCALAR, DIM_LENGTH    },   // required exactly when `rate` is given (D158)
+    { "p1",      VALUE_EXPRESSION, false, REQ_REQUIRED, TYPE_POINT,  DIM_LENGTH    },
+    { "p2",      VALUE_EXPRESSION, false, REQ_REQUIRED, TYPE_POINT,  DIM_LENGTH    },
 };
 
 static_assert( CATALOG_COUNT( catalogTopLevelProperties ) <= CATALOG_MAX_PROPERTIES, "raise CATALOG_MAX_PROPERTIES" );
@@ -47,12 +47,14 @@ static_assert( CATALOG_COUNT( catalogBodyProperties )     <= CATALOG_MAX_PROPERT
 static_assert( CATALOG_COUNT( catalogRevoluteProperties ) <= CATALOG_MAX_PROPERTIES, "raise CATALOG_MAX_PROPERTIES" );
 static_assert( CATALOG_COUNT( catalogTsdaProperties )     <= CATALOG_MAX_PROPERTIES, "raise CATALOG_MAX_PROPERTIES" );
 
-extern const ElementInfo Catalog_topLevel = { "the top level", catalogTopLevelProperties, CATALOG_COUNT( catalogTopLevelProperties ) };
-extern const ElementInfo Catalog_system   = { "a system",      catalogSystemProperties,   CATALOG_COUNT( catalogSystemProperties ) };
-extern const ElementInfo Catalog_body     = { "a body",        catalogBodyProperties,     CATALOG_COUNT( catalogBodyProperties ) };
+#define CATALOG_NOT_A_CONNECTOR 0, { ENDPOINT_NONE, ENDPOINT_NONE }
 
-static const ElementInfo catalogRevolute = { "revolute", catalogRevoluteProperties, CATALOG_COUNT( catalogRevoluteProperties ) };
-static const ElementInfo catalogTsda     = { "TSDA",     catalogTsdaProperties,     CATALOG_COUNT( catalogTsdaProperties ) };
+extern const ElementInfo Catalog_topLevel = { "the top level", catalogTopLevelProperties, CATALOG_COUNT( catalogTopLevelProperties ), CATALOG_NOT_A_CONNECTOR };
+extern const ElementInfo Catalog_system   = { "a system",      catalogSystemProperties,   CATALOG_COUNT( catalogSystemProperties ),   CATALOG_NOT_A_CONNECTOR };
+extern const ElementInfo Catalog_body     = { "a body",        catalogBodyProperties,     CATALOG_COUNT( catalogBodyProperties ),     CATALOG_NOT_A_CONNECTOR };
+
+static const ElementInfo catalogRevolute = { "revolute", catalogRevoluteProperties, CATALOG_COUNT( catalogRevoluteProperties ), 2, { ENDPOINT_BODY, ENDPOINT_BODY } };
+static const ElementInfo catalogTsda     = { "TSDA",     catalogTsdaProperties,     CATALOG_COUNT( catalogTsdaProperties ),     2, { ENDPOINT_BODY, ENDPOINT_BODY } };
 
 extern const ElementInfo *const Catalog_types[] =
 {

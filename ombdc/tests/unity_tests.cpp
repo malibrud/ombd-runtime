@@ -12,6 +12,7 @@
 #include "../src/catalog.cpp"
 #include "../src/resolve.cpp"
 #include "../src/types.cpp"
+#include "../src/assembly.cpp"
 
 #include "unit_test.cpp"
 #include "lexer_tests.cpp"
@@ -19,4 +20,5 @@
 #include "resolve_tests.cpp"
 #include "units_tests.cpp"
 #include "types_tests.cpp"
+#include "assembly_tests.cpp"
 #include "test_main.cpp"

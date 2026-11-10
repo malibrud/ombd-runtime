@@ -39,6 +39,7 @@ struct NodeInfo
 };
 
 struct ValueInfo;                // types.h
+struct Link;                     // assembly.h
 
 // One text given to the loader.
 struct Unit
@@ -125,6 +126,9 @@ struct Model
     uint32_t gravityNode;        // the `gravity:` statement, or 0
     uint32_t simulationUnit;     // the `simulation { }` block, or node 0
     uint32_t simulationNode;
+
+    Link    *links;              // the assembly's links, made by tryCheckAssembly, else NULL
+    uint32_t linkCount;
 };
 
 // Where loading stopped, and why.
@@ -141,7 +145,8 @@ struct LoadError
 // outlive the model.
 bool tryLoadModel( Unit *units, uint32_t unitCount, Model *model, LoadError *error );
 
-// Free the symbols, the scopes and every unit's `info` and `values`. The units stay.
+// Free the symbols, the scopes, the links and every unit's `info` and `values`.
+// The units stay.
 void Model_free( Model *model );
 
 // Print `path:line:col: error: message` to stderr.

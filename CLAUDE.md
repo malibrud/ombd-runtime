@@ -22,25 +22,26 @@ size them. The specification is in the sibling repo `../OMBD_Specification`:
     `MSYS_NO_PATHCONV=1` before calling `wsl.exe --cd /mnt/c/...`.
   - Keep `build.sh` LF and `build.bat` CRLF. `ombdc/.gitattributes` pins both.
   - Keep the two scripts in step when either changes.
-- **Pipeline so far.** `tryReadFile` → `tryLex` → `tryParse` → `tryLoadModel` → `tryCheckTypes`.
-  `ombdc --tokens`, `--ast`, `--names` and `--types` print each stage. The syntax tree is a flat
-  node array linked by index (`src/ast.h`); name resolution and type checking keep their results in
-  arrays parallel to it (`src/resolve.h`, `src/types.h`). `src/units.h` holds dimensions and unit
-  runs, and knows nothing about the tree.
+- **Pipeline so far.** `tryReadFile` → `tryLex` → `tryParse` → `tryLoadModel` → `tryCheckTypes` →
+  `tryCheckAssembly`. `ombdc --tokens`, `--ast`, `--names`, `--types` and `--assembly` print each
+  stage. The syntax tree is a flat node array linked by index (`src/ast.h`); name resolution and
+  type checking keep their results in arrays parallel to it (`src/resolve.h`, `src/types.h`), and
+  the assembly stage keeps a flat array of links on the model (`src/assembly.h`). `src/units.h`
+  holds dimensions and unit runs, and knows nothing about the tree.
 - **The catalog grows with the models** (`src/catalog.cpp`). Only §4.1's built-in names are complete,
-  so until the rest is filled in, `--names` and `--types` reject models for types they don't know
-  yet.
+  so until the rest is filled in, `--names`, `--types` and `--assembly` reject models for types they
+  don't know yet.
 - The build fails unless every check passes:
   - `/W4 /WX`;
-  - the unit tests, including the golden dumps `tests\*.tokens`, `tests\*.ast`, `tests\*.names` and
-    `tests\*.types`;
+  - the unit tests, including the golden dumps `tests\*.tokens`, `tests\*.ast`, `tests\*.names`,
+    `tests\*.types` and `tests\*.assembly`;
   - every `.ombd` under `../OMBD_Specification/Examples` parses.
 - **Unity-build names.** Every `static` shares one translation unit, so module helpers carry a
   prefix (`Parser_peek`), and test helpers `test_`.
 - **Style.** C-style C++: structs and free functions, `bool tryX(in, out*)` stages,
   `Type_function` operations. No classes, templates, exceptions or STL. No Chrono.
 - **Goldens.** Regenerate a golden with `build\ombdc.exe --tokens <model> > tests\<name>.tokens`
-  (or `--ast`, `--names` or `--types` into the matching file) from cmd or bash. Review it by hand before checking it in.
+  (or `--ast`, `--names`, `--types` or `--assembly` into the matching file) from cmd or bash. Review it by hand before checking it in.
   PowerShell's `>` re-encodes the output, so don't use it.
 
 ### `chrono_rt_bench`
