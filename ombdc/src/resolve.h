@@ -38,6 +38,8 @@ struct NodeInfo
     const PropertyInfo *property;// for ROLE_PROPERTY: the catalog's entry
 };
 
+struct ValueInfo;                // types.h
+
 // One text given to the loader.
 struct Unit
 {
@@ -45,6 +47,7 @@ struct Unit
     TokenArray tokens;
     Ast        ast;
     NodeInfo  *info;             // parallel to ast.nodes; made by tryLoadModel
+    ValueInfo *values;           // parallel to ast.nodes; made by tryCheckTypes, else NULL
 };
 
 enum SymbolKind
@@ -85,6 +88,13 @@ enum ScopeKind
     SCOPE_NAMESPACE,
     SCOPE_SYSTEM,
     SCOPE_BODY,
+};
+
+// The two scopes every model has.
+enum
+{
+    SCOPE_INDEX_BUILTIN = 1,
+    SCOPE_INDEX_TOP     = 2,
 };
 
 struct Scope
@@ -131,7 +141,7 @@ struct LoadError
 // outlive the model.
 bool tryLoadModel( Unit *units, uint32_t unitCount, Model *model, LoadError *error );
 
-// Free the symbols, the scopes and every unit's `info`. The units stay.
+// Free the symbols, the scopes and every unit's `info` and `values`. The units stay.
 void Model_free( Model *model );
 
 // Print `path:line:col: error: message` to stderr.

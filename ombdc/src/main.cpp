@@ -3,6 +3,7 @@
 //     ombdc --tokens file.ombd       lex the file and print one token per line
 //     ombdc --ast file.ombd          parse the file and print its syntax tree
 //     ombdc --names file.ombd ...    load the files as one model and print its names
+//     ombdc --types file.ombd ...    load and type-check them, and print every value's type
 //
 // Exit status: 0 on success, 1 on an error in a file, 2 on bad arguments.
 
@@ -18,12 +19,14 @@
 #include "lexer.h"
 #include "parser.h"
 #include "resolve.h"
+#include "types.h"
 
 static void printUsage( void )
 {
     fprintf( stderr, "usage: ombdc --tokens file.ombd\n"
                      "       ombdc --ast file.ombd\n"
-                     "       ombdc --names file.ombd ...\n" );
+                     "       ombdc --names file.ombd ...\n"
+                     "       ombdc --types file.ombd ...\n" );
 }
 
 // Write a dump to stdout as-is.
@@ -115,7 +118,9 @@ static int printAst( const char *path )
     return 0;
 }
 
-static int printNames( char **paths, uint32_t count )
+// Load the files as one model, then type-check it if `checkTypes`, and print
+// the dump of the last stage that ran.
+static int printModel( char **paths, uint32_t count, bool checkTypes )
 {
     Unit *units = (Unit *)calloc( count, sizeof( Unit ) );
     if ( units == NULL )
@@ -136,10 +141,16 @@ static int printNames( char **paths, uint32_t count )
         LoadError_print( units, &error );
         return 1;
     }
+    if ( checkTypes && !tryCheckTypes( &model, &error ) )
+    {
+        LoadError_print( units, &error );
+        return 1;
+    }
 
-    uint32_t size = Model_format( &model, NULL, 0 );
+    uint32_t size = checkTypes ? Model_formatTypes( &model, NULL, 0 ) : Model_format( &model, NULL, 0 );
     char    *dump = allocateDump( size );
-    Model_format( &model, dump, size + 1 );
+    if ( checkTypes ) Model_formatTypes( &model, dump, size + 1 );
+    else              Model_format( &model, dump, size + 1 );
     writeDump( dump, size );
 
     free( dump );
@@ -158,7 +169,8 @@ int main( int argc, char *argv[] )
 {
     if ( argc == 3 && strcmp( argv[1], "--tokens" ) == 0 ) return printTokens( argv[2] );
     if ( argc == 3 && strcmp( argv[1], "--ast" ) == 0 )    return printAst( argv[2] );
-    if ( argc >= 3 && strcmp( argv[1], "--names" ) == 0 )  return printNames( &argv[2], (uint32_t)( argc - 2 ) );
+    if ( argc >= 3 && strcmp( argv[1], "--names" ) == 0 )  return printModel( &argv[2], (uint32_t)( argc - 2 ), false );
+    if ( argc >= 3 && strcmp( argv[1], "--types" ) == 0 )  return printModel( &argv[2], (uint32_t)( argc - 2 ), true );
 
     printUsage();
     return 2;

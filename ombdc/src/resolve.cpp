@@ -20,13 +20,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-// The two scopes every model has.
-enum
-{
-    SCOPE_INDEX_BUILTIN = 1,
-    SCOPE_INDEX_TOP     = 2,
-};
-
 // Lookup spaces (§3.2, D144) are sets of symbol kinds.
 #define SYM_BIT( kind ) ( 1u << (kind) )
 
@@ -1195,7 +1188,7 @@ static void Model_init( Model *m, Unit *units, uint32_t unitCount )
 
     for ( uint32_t i = 0 ; i < Catalog_builtinValueCount ; i++ )
     {
-        const char *name = Catalog_builtinValues[i];
+        const char *name = Catalog_builtinValues[i].name;
         Model_addSymbol( m, SYM_BUILTIN_VALUE, name, (uint32_t)strlen( name ), 0, 0, 0, SCOPE_INDEX_BUILTIN );
     }
     for ( uint32_t i = 0 ; i < Catalog_builtinFunctionCount ; i++ )
@@ -1212,7 +1205,8 @@ static void Model_init( Model *m, Unit *units, uint32_t unitCount )
 
     for ( uint32_t u = 0 ; u < unitCount ; u++ )
     {
-        units[u].info = (NodeInfo *)calloc( units[u].ast.count, sizeof( NodeInfo ) );
+        units[u].values = NULL;
+        units[u].info   = (NodeInfo *)calloc( units[u].ast.count, sizeof( NodeInfo ) );
         if ( units[u].info == NULL )
         {
             fprintf( stderr, "ombdc: out of memory\n" );
@@ -1242,7 +1236,9 @@ void Model_free( Model *model )
     for ( uint32_t u = 0 ; u < model->unitCount ; u++ )
     {
         free( model->units[u].info );
-        model->units[u].info = NULL;
+        free( model->units[u].values );
+        model->units[u].info   = NULL;
+        model->units[u].values = NULL;
     }
     free( model->symbols );
     free( model->scopes );

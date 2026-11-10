@@ -1,0 +1,33 @@
+unit 1
+19:10 QUANTITY vector L T-2 factor 1
+19:10 LIST list[3] 1
+19:11 NUMBER scalar 1
+19:14 NUMBER scalar 1
+19:17 UNARY scalar 1
+19:18 NUMBER scalar 1
+27:5 DEFINITION point L
+27:15 POINT point L factor 1
+27:16 NUMBER scalar 1
+27:19 NUMBER scalar 1
+27:23 NUMBER scalar 1
+28:5 DEFINITION point L
+28:15 POINT point L factor 1
+28:16 NUMBER scalar 1
+28:19 NUMBER scalar 1
+28:22 UNARY scalar 1
+28:23 NUMBER scalar 1
+36:16 QUANTITY scalar M factor 1
+36:16 NUMBER scalar 1
+37:16 CALL point L
+37:20 NAME point L
+37:27 NAME point L
+38:16 QUANTITY matrix L2 M factor 1
+38:16 CALL matrix 1
+38:21 NUMBER scalar 1
+38:28 NUMBER scalar 1
+38:35 NUMBER scalar 1
+45:26 NAME point L
+45:39 LIST vector 1
+45:40 NUMBER scalar 1
+45:43 NUMBER scalar 1
+45:46 NUMBER scalar 1

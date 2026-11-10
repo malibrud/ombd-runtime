@@ -13,3 +13,6 @@
 
 # The golden name dumps too.
 *.names text eol=lf
+
+# And the golden type dumps.
+*.types text eol=lf

@@ -3,7 +3,7 @@
 //     ombdc_tests <examples-dir> <golden-dir>
 //
 // <examples-dir> holds Pendulum.ombd and SliderCrank.ombd (the specification
-// repo's Examples); <golden-dir> holds their reviewed dumps (*.tokens, *.ast, *.names).
+// repo's Examples); <golden-dir> holds their reviewed dumps (*.tokens, *.ast, *.names, *.types).
 // Exit status: the number of failed tests, or 2 on bad arguments.
 
 #include <stdio.h>
@@ -12,6 +12,8 @@
 void lexer_ut( const char *examplesDir, const char *goldenDir );
 void parser_ut( const char *examplesDir, const char *goldenDir );
 void resolve_ut( const char *examplesDir, const char *goldenDir );
+void units_ut( void );
+void types_ut( const char *examplesDir, const char *goldenDir );
 
 int main( int argc, char *argv[] )
 {
@@ -24,6 +26,8 @@ int main( int argc, char *argv[] )
     lexer_ut( argv[1], argv[2] );
     parser_ut( argv[1], argv[2] );
     resolve_ut( argv[1], argv[2] );
+    units_ut();
+    types_ut( argv[1], argv[2] );
 
     return ut_reportTotals();
 }

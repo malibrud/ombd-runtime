@@ -6,7 +6,7 @@ rem  Each program is one translation unit, compiled from scratch:
 rem      src\unity.cpp          -^> build\ombdc.exe
 rem      tests\unity_tests.cpp  -^> build\ombdc_tests.exe
 rem  Then the checks run, and any failure fails the build:
-rem      the unit tests and the golden dumps (tests\*.tokens, tests\*.ast)
+rem      the unit tests and the golden dumps (tests\*.tokens, *.ast, *.names, *.types)
 rem      every .ombd under ..\..\OMBD_Specification\Examples must parse
 rem
 rem      build.bat            release

@@ -9,6 +9,8 @@
 #include "lexer.cpp"
 #include "ast.cpp"
 #include "parser.cpp"
+#include "units.cpp"
 #include "catalog.cpp"
 #include "resolve.cpp"
+#include "types.cpp"
 #include "main.cpp"

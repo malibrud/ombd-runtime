@@ -7,7 +7,7 @@
 #      src/unity.cpp          -> build/ombdc
 #      tests/unity_tests.cpp  -> build/ombdc_tests
 #  Then the checks run, and any failure fails the build:
-#      the unit tests and the golden dumps (tests/*.tokens, tests/*.ast)
+#      the unit tests and the golden dumps (tests/*.tokens, *.ast, *.names, *.types)
 #      every .ombd under ../../OMBD_Specification/Examples must parse
 #
 #  Uses $CXX if set, else c++ (g++ or clang++).
