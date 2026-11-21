@@ -35,7 +35,7 @@ enum NodeKind
     NODE_DRIVE,          // path expr                               `j.angle.pos <- theta;`; token is the `<-`
     NODE_REFERENCE,      // path                                    `engine_rpm;` in inputs/outputs
     NODE_CHAIN,          // endpoint SLOT endpoint { SLOT endpoint } [FOR]   an assembly line (D30)
-    NODE_SLOT,           // lhs                                     `<jAxle>`; token is the `<`
+    NODE_SLOT,           // path                                    `<jAxle>`, `<corner.jUBJ>` (D181); token is the `<`
     NODE_AXIS,           // NAME ITEMS                              `in rpm: [...] rpm;` in a map; token is `in` or `out`
     NODE_WHEN,           // guard NAME                              `when sr > 0.92 -> locked;` in a state
     NODE_ITEMS,          // item { item }                           the comma list after `:` or `=`
@@ -62,7 +62,7 @@ enum NodeKind
     NODE_FRAME,          // expr expr                               `<[ p, o ]>` (D149)
     NODE_TYPED_BLOCK,    // NAME BLOCK                              `map { }`, `differential { }` as a value
     NODE_QUANTITY,       // expr UNIT                               a value literal and its unit run
-    NODE_UNIT,           //                                         a unit run (§2.6), kept as its token span
+    NODE_UNIT,           //                                         a unit run (§2.6), kept as its token span; or a half's `1` (D194)
 
     NODE_KIND_COUNT      // the number of kinds; not a node
 };

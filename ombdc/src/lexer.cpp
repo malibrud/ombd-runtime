@@ -32,6 +32,9 @@ static bool tryScanToken( Lexer *lex, Token *token );
 static void scanWord( Lexer *lex, Token *token );
 static void scanNumber( Lexer *lex, Token *token );
 static bool tryScanString( Lexer *lex, Token *token );
+static bool isLetter( uint8_t c );
+static bool isDigit( uint8_t c );
+static bool isKeyword( const uint8_t *word, uint32_t count );
 
 //////////////////////////////////////////////////////////////////////////////
 // Public API
@@ -94,7 +97,10 @@ void LexError_print( const Source *source, const LexError *error )
     switch ( error->kind )
     {
     case LEX_CONTROL_BYTE:
-        fprintf( stderr, "control byte 0x%02X is not allowed; only tab, CR and LF are", c );
+        // Tab and \r are errors only inside a string (D188).
+        if ( c == '\t' )      fprintf( stderr, "a tab inside a string; a string is one line of visible text" );
+        else if ( c == '\r' ) fprintf( stderr, "a carriage return inside a string; is the closing '\"' missing?" );
+        else                  fprintf( stderr, "control byte 0x%02X is not allowed; only tab, CR and LF are", c );
         break;
     case LEX_NON_ASCII:
         fprintf( stderr, "non-ASCII byte 0x%02X outside a comment or string; "
@@ -119,6 +125,18 @@ void LexError_print( const Source *source, const LexError *error )
         fprintf( stderr, "lone '!'; it must begin '!='" );
         break;
     case LEX_STRAY_PRIME:
+        // Every other word takes its primes, so say so when the prime follows
+        // a keyword (D189).
+        {
+            const uint8_t *text  = (const uint8_t *)source->text;
+            uint32_t       start = error->offset;
+            while ( start > 0 && ( isLetter( text[start - 1] ) || isDigit( text[start - 1] ) || text[start - 1] == '_' ) ) start--;
+            if ( isKeyword( text + start, error->offset - start ) )
+            {
+                fprintf( stderr, "the keyword '%.*s' never takes a prime", (int)( error->offset - start ), (const char *)text + start );
+                break;
+            }
+        }
         fprintf( stderr, "''' must end an identifier, as in Y'" );
         break;
     case LEX_BAD_PUNCTUATION:
@@ -454,17 +472,26 @@ static bool isKeyword( const uint8_t *word, uint32_t count )
 }
 
 // IDENT = [A-Za-z_] [A-Za-z0-9_]* "'"*   (§1.4, D120)
-// A word spelled exactly like a reserved word is a KEYWORD.
+// A word spelled exactly like a reserved word is a KEYWORD. The keyword test
+// comes before the primes, and a keyword never takes one (D189): `for'` is
+// KEYWORD(for), and its `'` is then a stray prime.
 static void scanWord( Lexer *lex, Token *token )
 {
     const uint8_t *text = lex->text;
     uint32_t pos = lex->pos + 1;
 
     while ( isLetter( text[pos] ) || isDigit( text[pos] ) || text[pos] == '_' ) pos++;
-    while ( text[pos] == '\'' ) pos++;           // primes belong to the word
 
+    lex->pos = pos;
+    if ( isKeyword( text + token->offset, pos - token->offset ) )
+    {
+        token->kind = TOK_KEYWORD;
+        return;
+    }
+
+    while ( text[pos] == '\'' ) pos++;           // primes belong to the word
     lex->pos    = pos;
-    token->kind = isKeyword( text + token->offset, pos - token->offset ) ? TOK_KEYWORD : TOK_IDENT;
+    token->kind = TOK_IDENT;
 }
 
 // NUMBER = DIGITS [ "." DIGITS ] [ ("e" | "E") ["+" | "-"] DIGITS ]   (§1.5, D117)
@@ -500,7 +527,7 @@ static void scanNumber( Lexer *lex, Token *token )
     token->kind = TOK_NUMBER;
 }
 
-// STRING = '"' { any byte except '"', '\', 0x0A } '"'   (§1.6, D122)
+// STRING = '"' { any byte except '"', '\', 0x09, 0x0A, 0x0D } '"'   (§1.6, D122, D188)
 // The token spans both quotes; its value is the bytes between them.
 static bool tryScanString( Lexer *lex, Token *token )
 {
@@ -519,7 +546,11 @@ static bool tryScanString( Lexer *lex, Token *token )
         {
             return fail( lex, LEX_UNTERMINATED_STRING, token->offset, token->line, token->col );
         }
-        if ( isControlByte( c ) ) return failAt( lex, LEX_CONTROL_BYTE, pos );
+
+        // A string is one line of visible text (D188), so a tab or \r in it is
+        // a control byte too. The first error wins (D187): in a CRLF file, a
+        // string missing its closing quote stops at the \r.
+        if ( isControlByte( c ) || c == '\t' || c == '\r' ) return failAt( lex, LEX_CONTROL_BYTE, pos );
         pos++;                                   // any other byte, non-ASCII included
     }
 

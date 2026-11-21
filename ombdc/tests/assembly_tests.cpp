@@ -168,6 +168,8 @@ static AssemblyErrorCase assemblyErrorCases[] =
     // not implemented yet
     { "system s {\nbodies { a " TEST_BODY " }\nj: " TEST_JOINT ";\nassembly { world <j> a.flange; }\n}",
       4, 22, "not implemented yet: a port as an endpoint" },
+    { "system s {\nsystem t {\nj: " TEST_JOINT ";\n}\nbodies { b " TEST_BODY " }\nassembly { world <t.j> b; }\n}",
+      6, 19, "not implemented yet: a connector in a nested system, by path (D181)" },
 };
 
 static void test_assemblyErrorCases( void )

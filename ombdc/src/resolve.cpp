@@ -1040,6 +1040,11 @@ static bool tryResolveChain( Loader *l, uint32_t unit, uint32_t chain, uint32_t 
         }
 
         uint32_t connector = Loader_child( l, unit, c );
+        if ( Loader_kind( l, unit, connector ) == NODE_ACCESS )
+        {
+            return Loader_failAt( l, unit, Loader_at( l, unit, connector ),
+                                  "not implemented yet: a connector in a nested system, by path (D181)" );
+        }
         if ( Loader_kind( l, unit, connector ) != NODE_NAME )
         {
             return Loader_failAt( l, unit, Loader_at( l, unit, connector ), "not implemented yet: an indexed connector" );

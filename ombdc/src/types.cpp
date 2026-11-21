@@ -331,8 +331,11 @@ static bool Checker_takesDimension( const Checker *c, uint32_t unit, uint32_t no
         return Checker_isDiag( c, unit, node );
 
     case NODE_UNARY:
-        return Checker_operatorKind( c, unit, node ) == TOK_MINUS
+    {
+        TokenKind op = Checker_operatorKind( c, unit, node );
+        return ( op == TOK_MINUS || op == TOK_PLUS )
             && Checker_takesDimension( c, unit, Checker_child( c, unit, node ) );
+    }
 
     case NODE_BINARY:
     {
@@ -745,8 +748,10 @@ static bool tryInferUnary( Checker *c, Site site, uint32_t node, const Dimension
     uint32_t    length;
     const char *spelling = Checker_text( c, site.unit, token, &length );
 
+    // Prefix '+' is legal on exactly the types prefix '-' is, with the same
+    // result type (D191), so it types as a negation. Its value is the operand's.
     UnaryOp op;
-    if ( kind == TOK_MINUS )
+    if ( kind == TOK_MINUS || kind == TOK_PLUS )
     {
         op = UNARY_NEGATE;
         if ( !tryInfer( c, site, operand, expected ) ) return false;

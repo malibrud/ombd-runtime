@@ -170,6 +170,11 @@ static TreeCase expressionCases[] =
     { "a * b / c mod d",                  "(mod (/ (* a b) c) d)" },
     { "-a * b",                           "(* (- a) b)" },
     { "- - a",                            "(- (- a))" },
+    // prefix '+' (D191)
+    { "+5",                               "(+ 5)" },
+    { "+a * b",                           "(* (+ a) b)" },
+    { "- +a",                             "(- (+ a))" },
+    { "a + +b",                           "(+ a (+ b))" },
     { "^F \\> P",                         "(\\> (^ F) P)" },
     { "F \\> G \\> P",                    "(\\> F (\\> G P))" },
     { "F ▷ P",                            "(▷ F P)" },
@@ -202,8 +207,8 @@ static TreeCase expressionCases[] =
     { "5 m - x",                          "(- (QUANTITY 5 m) x)" },
     { "5 m-x",                            "(QUANTITY 5 m-x)" },
     { "5 m -x",                           "(- (QUANTITY 5 m) x)" },
-    { "0.5 in * sin(2*pi * 0.25 Hz * time)",
-      "(* (QUANTITY 0.5 in) (CALL sin (* (* (* 2 pi) (QUANTITY 0.25 Hz)) time)))" },
+    { "0.5 in * sin(360 deg * 0.25 Hz * time)",
+      "(* (QUANTITY 0.5 in) (CALL sin (* (* (QUANTITY 360 deg) (QUANTITY 0.25 Hz)) time)))" },
     { "diag(1, 2, 3) kg-m2",              "(QUANTITY (CALL diag 1 2 3) kg-m2)" },
     { "max(a, 3 rpm)",                    "(CALL max a (QUANTITY 3 rpm))" },
     { "max(0 x)",                         "(CALL max (QUANTITY 0 x))" },
@@ -243,6 +248,16 @@ static TreeCase expressionCases[] =
     { "[0 .. 1]",                         "(LIST (.. 0 1))" },
     { "[left, right]",                    "(LIST left right)" },
     { "[\"a\" \"b\"]",                    "(LIST \"a\" \"b\")" },
+    // a spaced sign is rule 3, for '+' as for '-' (D191)
+    { "[+1 -1 0]",                        "(LIST (+ 1) (- 1) 0)" },
+    { "[0 +1 0]",                         "(LIST 0 (+ 1) 0)" },
+    { "[1 + 2]",                          "(LIST (+ 1 2))" },
+    { "[1+2]",                            "(LIST (+ 1 2))" },
+    // a spaced '<' starts a quaternion entry (rule 4, D190)
+    { "[<1> <0; 1 0 0>]",                 "(LIST (QUATERNION 1) (QUATERNION 0 1 0 0))" },
+    { "[a <1>]",                          "(LIST a (QUATERNION 1))" },
+    { "[<1>, <0; 1 0 0>]",                "(LIST (QUATERNION 1) (QUATERNION 0 1 0 0))" },
+    { "[[<1> <1>; <1> <1>]]",             "(GRID (ROW (QUATERNION 1) (QUATERNION 1)) (ROW (QUATERNION 1) (QUATERNION 1)))" },
 
     // grids (D143)
     { "[[1 0 0; 0 1 0; 0 0 1]]",          "(GRID (ROW 1 0 0) (ROW 0 1 0) (ROW 0 0 1))" },
@@ -262,6 +277,9 @@ static TreeCase expressionCases[] =
       "(SPATIAL (HALF ka kb kc N/m) (HALF ra rb rc N-m/rad))" },
     { "[| 300000, 300000, 450000 N/m ; 4000 4000 3000 N-m/rad |]",
       "(SPATIAL (HALF 300000 300000 450000 N/m) (HALF 4000 4000 3000 N-m/rad))" },
+    // a dimensionless half writes the unit 1 (D194)
+    { "[| a b c 1 ; d e f N-m/rad |]",    "(SPATIAL (HALF a b c 1) (HALF d e f N-m/rad))" },
+    { "[| 1 2 3 1 ; 4 5 6 1 |]",          "(SPATIAL (HALF 1 2 3 1) (HALF 4 5 6 1))" },
 
     // quaternions (D38, D128, D131)
     { "<1>",                              "(QUATERNION 1)" },
@@ -271,6 +289,12 @@ static TreeCase expressionCases[] =
     { "<0.7; 0, 0, 0.7>",                 "(QUATERNION 0.7 0 0 0.7)" },
     { "<a + b>",                          "(QUATERNION (+ a b))" },
     { "<1; 0 0 a[i]>",                    "(QUATERNION 1 0 0 (INDEX a i))" },
+    // space-separated throughout; the scalar part is one entry (D185)
+    { "<a - b>",                          "(QUATERNION (- a b))" },
+    { "<a - b; 0 0 1>",                   "(QUATERNION (- a b) 0 0 1)" },
+    { "< -1>",                            "(QUATERNION (- 1))" },
+    { "< +1; 0 0 0>",                     "(QUATERNION (+ 1) 0 0 0)" },
+    { "<a-b>",                            "(QUATERNION (- a b))" },
 
     // orientations (D38, D140)
     { "<| [[1 0 0; 0 1 0; 0 0 1]] |>",    "(ORIENTATION (GRID (ROW 1 0 0) (ROW 0 1 0) (ROW 0 0 1)))" },
@@ -386,6 +410,11 @@ static TreeCase statementCases[] =
       "(SCOPE assembly (BLOCK (CHAIN a (SLOT j1) b (SLOT j2) (ACCESS c d))))" },
     { "assembly { engine.crank <shaft> converter.pump; }",
       "(SCOPE assembly (BLOCK (CHAIN (ACCESS engine crank) (SLOT shaft) (ACCESS converter pump))))" },
+    // a slot and an endpoint may be paths into a nested system (D181, D182)
+    { "assembly { chassis <cornerLF.jUCA> cornerLF.bUCA; }",
+      "(SCOPE assembly (BLOCK (CHAIN chassis (SLOT (ACCESS cornerLF jUCA)) (ACCESS cornerLF bUCA))))" },
+    // elsewhere the reserved block names are ordinary names (D192)
+    { "states = 3; assembly: 1;",                 "(DEFINITION states (ITEMS 3)) (DECLARATION assembly (ITEMS 1))" },
     { "assembly { shoe[i] <pin[i]> shoe[(i+1) mod n] for i in 0..n-1; }",
       "(SCOPE assembly (BLOCK (CHAIN (INDEX shoe i) (SLOT (INDEX pin i)) (INDEX shoe (mod (+ i 1) n)) "
       "(FOR i (.. 0 (- n 1))))))" },
@@ -411,6 +440,22 @@ static TreeCase statementCases[] =
     { "c: fsm { states { s { when a and b and c -> t; when gear != 1 -> u; } } }",
       "(DECLARATION c (TYPED_BLOCK fsm (BLOCK (SCOPE states (BLOCK (SCOPE s (BLOCK "
       "(WHEN (and (and a b) c) t) (WHEN (!= gear 1) u))))))))" },
+    // parentheses group a guard (D195)
+    { "c: fsm { states { s { when (a < b or c) and not (d > e) -> t; } } }",
+      "(DECLARATION c (TYPED_BLOCK fsm (BLOCK (SCOPE states (BLOCK (SCOPE s (BLOCK "
+      "(WHEN (and (or (< a b) c) (not (> d e))) t))))))))" },
+    { "c: fsm { states { s { when (a + b) < c -> t; } } }",
+      "(DECLARATION c (TYPED_BLOCK fsm (BLOCK (SCOPE states (BLOCK (SCOPE s (BLOCK "
+      "(WHEN (< (+ a b) c) t))))))))" },
+    { "c: fsm { states { s { when ((a < b)) -> t; } } }",
+      "(DECLARATION c (TYPED_BLOCK fsm (BLOCK (SCOPE states (BLOCK (SCOPE s (BLOCK "
+      "(WHEN (< a b) t))))))))" },
+    { "c: fsm { states { s { when (1, 2, 3) == p -> t; } } }",
+      "(DECLARATION c (TYPED_BLOCK fsm (BLOCK (SCOPE states (BLOCK (SCOPE s (BLOCK "
+      "(WHEN (== (POINT 1 2 3) p) t))))))))" },
+    { "c: fsm { states { s { when max(a, b) < c -> t; } } }",
+      "(DECLARATION c (TYPED_BLOCK fsm (BLOCK (SCOPE states (BLOCK (SCOPE s (BLOCK "
+      "(WHEN (< (CALL max a b) c) t))))))))" },
     { "c: fsm { inputs { sr; } outputs { locked: bool; } }",
       "(DECLARATION c (TYPED_BLOCK fsm (BLOCK (SCOPE inputs (BLOCK (REFERENCE sr))) "
       "(SCOPE outputs (BLOCK (DECLARATION locked (ITEMS bool)))))))" },
@@ -515,6 +560,9 @@ static ParseErrorCase parseErrorCases[] =
     // A spaced IDENT after a number is its unit, even across a line end
     // (LINE_BEFORE has no syntactic meaning, §1.2): `1` and `y` are one value.
     { "system t {\nx = 1\ny = 2;\n}",                   3, 3,  "expected ';'" },
+    // ... and the message asks whether a ';' is missing (D197)
+    { "system t {\nx = 1\ny = 2;\n}",                   3, 3,  "is a ';' missing at the end of the previous line? (D197)" },
+    { "system t {\nx = 1\n  y = 2;\n}",                 3, 5,  "is a ';' missing at the end of the previous line?" },
     { "system t {\nx = a < b;\n}",                      2, 7,  "legal only in a 'when' guard" },
     { "system t {\nx = a and b;\n}",                    2, 7,  "legal only in a 'when' guard" },
     { "system t {\nx = not a;\n}",                      2, 5,  "'not' is legal only in a 'when' guard" },
@@ -543,12 +591,20 @@ static ParseErrorCase parseErrorCases[] =
     { "system t {\nx = [[1 0 0]];\n}",                  2, 5,  "at least two rows" },
     { "system t {\nx = [[1 0; 0 1 0]];\n}",             2, 12, "same number of entries" },
     { "system t {\nx = <1; 0 0>;\n}",                   2, 5,  "a quaternion is <w> or <w; x y z>" },
-    { "system t {\nx = <1 2>;\n}",                      2, 8,  "expected '>' to close the quaternion" },
+    { "system t {\nx = <1 2>;\n}",                      2, 8,  "a quaternion has one scalar part" },
+    { "system t {\nx = <a -b>;\n}",                     2, 8,  "a quaternion has one scalar part; for a difference write it with a space after the sign, as in <a - b>, or add ';' after the scalar (D185)" },
+    { "system t {\nx = <a -b; 0 0 1>;\n}",              2, 8,  "a quaternion has one scalar part" },
+    { "system t {\nx = <a, b>;\n}",                     2, 9,  "a quaternion has one scalar part" },
+    { "system t {\nx = <>;\n}",                         2, 6,  "expected the quaternion's scalar part" },
     { "system t {\nx = [| a b ; c d e N |];\n}",        2, 8,  "exactly three entries" },
     { "system t {\nx = [| a b c ; d e f N |];\n}",      2, 14, "the half's unit" },
+    { "system t {\nx = [| a b c 2 ; d e f N |];\n}",    2, 14, "or '1' for a dimensionless half (D194)" },
+    { "system t {\nx = [| a b c 1.0 ; d e f N |];\n}",  2, 14, "or '1' for a dimensionless half" },
+    { "system t {\nx = [| a b c 1 m ; d e f N |];\n}",  2, 16, "expected ';' between the halves" },
     { "system t {\nx = <[ p ]>;\n}",                    2, 5,  "a frame is <[ point, orientation ]>" },
     { "system t {\nx = <[ p, q ]> m;\n}",               2, 16, "a frame takes no unit" },
-    { "system t {\nx = <[ p, Y': q ]>;\n}",             2, 11, "primed name" },
+    { "system t {\nx = <[ p, Y': q ]>;\n}",             2, 11, "a frame entry takes no label" },
+    { "system t {\nx = <[ p: (1, 2, 3), q ]>;\n}",      2, 8,  "a frame entry takes no label; labels name Euler axes in <| |> (D196)" },
 
     // compound closers are two tight tokens (D168)
     { "system t {\nx = [[1 0; 0 1] ];\n}",              2, 17, "must be adjacent" },
@@ -569,9 +625,8 @@ static ParseErrorCase parseErrorCases[] =
     { "system t {\nx = 5 m^x;\n}",                      2, 9,  "after '^' in a unit comes a number" },
 
     // bracket entries (§2.7)
-    { "system t {\nx = [0 +1 0];\n}",                   2, 8,  "there is no prefix '+'" },
-    { "system t {\nx = +1;\n}",                         2, 5,  "there is no prefix '+'" },
-    { "system t {\nx = [<1> <0; 1 0 0>];\n}",           2, 10, "separate quaternions in a list with commas" },
+    { "system t {\nx = [a < b];\n}",                    2, 11, "expected '>' to close the quaternion" },   // D190
+    { "system t {\nx = [a<b];\n}",                      2, 7,  "legal only in a 'when' guard" },
     { "system t {\nx = [1, 2,];\n}",                    2, 11, "must be followed by an entry" },
     { "system t {\nx = [1 2;\n}",                       2, 9,  "expected ',' or the end of the bracket" },
 
@@ -582,6 +637,25 @@ static ParseErrorCase parseErrorCases[] =
     { "system t {\nassembly { a b; }\n}",               2, 14, "an assembly line is 'a <connector> b;'" },
     { "system t {\nassembly { a <j b; }\n}",            2, 17, "'>' to close the connector slot" },
     { "system t {\nc: fsm { states { x: 1; } }\n}",     2, 19, "holds only states" },
+
+    // a block's shape follows its name alone, so the names are reserved there (D192)
+    { "system t {\nbodies { assembly { mass: 1 kg; } }\n}",
+                                                        2, 21, "the name 'assembly' is reserved for that block and can't name a body or other block (D192)" },
+    { "system t {\nbodies { states { mass: 1 kg; } }\n}",
+                                                        2, 19, "the name 'states' is reserved for that block" },
+    { "system t {\nc: fsm { states { assembly { } } }\n}",
+                                                        2, 19, "'assembly' is reserved for its block form and can't name a state (D192)" },
+    { "system t {\nc: fsm { states { states { } } }\n}",
+                                                        2, 19, "'states' is reserved for its block form and can't name a state" },
+    { "system t {\nc: fsm { states { s { when: true; } } }\n}",
+                                                        2, 23, "an fsm output can't be named 'when' (D192)" },
+
+    // a guard's parentheses group a guard, and only a guard's (D195)
+    { "system t {\nx = (a < b);\n}",                    2, 8,  "legal only in a 'when' guard" },
+    { "system t {\nc: fsm { states { s { when f(a < b) -> t; } } }\n}",
+                                                        2, 32, "legal only in a 'when' guard" },
+    { "system t {\nc: fsm { states { s { when (a < b -> t; } } }\n}",
+                                                        2, 35, "expected ',' or ')'" },
     { "system t {\nc: fsm { states { s { when a -> 1; } } }\n}",
                                                         2, 33, "expected a name" },
     { "system t {\nx = 1;\n",                           3, 1,  "expected '}' to close the block opened at 1:10" },

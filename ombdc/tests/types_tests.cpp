@@ -236,6 +236,8 @@ static TypeCase typeCases[] =
     { "system s {\nx = 7 mod 3;\n}",                               "x=scalar 1" },
     { "system s {\nx = 7 m mod 3 m;\n}",                           "x=scalar L" },
     { "system s {\nx = -5 kg;\n}",                                 "x=scalar M" },
+    { "system s {\nx = +5 kg;\n}",                                 "x=scalar M" },             // prefix '+' (D191)
+    { "system s {\nv = +[1, 2, 3] m;\n}",                          "v=vector L" },
     { "system s {\nx = 2 * 3;\n}",                                 "x=scalar 1" },
     { "system s {\nx = pi;\n}",                                    "x=scalar 1" },
     { "system s {\nx = time;\n}",                                  "x=scalar T" },
@@ -392,6 +394,7 @@ static TypeErrorCase typeErrorCases[] =
     { "system s {\na = (0, 0, 0) m;\nb = (0, 0, 1) m;\nc = a \\. b;\n}", 4, 7, "no operation '\\.' between point and point" },
     { "system s {\na = (0, 0, 0) m;\nb = (0, 0, 1) m;\nc = a \\x b;\n}", 4, 7, "no operation '\\x' between point and point" },
     { "system s {\na = (0, 0, 0) m;\nc = -a;\n}",                  3, 5,  "no operation '-' on a point" },
+    { "system s {\na = (0, 0, 0) m;\nc = +a;\n}",                  3, 5,  "no operation '+' on a point" },   // as '-' (D191)
     { "system s {\nx = ^2;\n}",                                    2, 5,  "no operation '^' on a scalar" },
     { "system s {\nv = [1, 2] + [3, 4];\n}",                       2, 12, "no operation '+' between list[2] and list[2]" },
 

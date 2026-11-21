@@ -12,10 +12,11 @@
 //   expects one, with the second half tight against the first.
 //
 // - Bracket context (§2.6, §2.7). Inside a space-separated bracket (a list,
-//   a grid row, a spatial-vector half, a quaternion's x y z), whitespace can
-//   end an entry, and an IDENT after an entry starts a new entry instead of a
-//   unit. Two flags carry that context; every bracket sets them for its
-//   contents and restores them after.
+//   a grid row, a spatial-vector half, a quaternion), whitespace can end an
+//   entry, and an IDENT after an entry starts a new entry instead of a unit.
+//   Two flags carry that context; every bracket sets them for its contents
+//   and restores them after. A third flag marks a guard, where `( )` may
+//   group a condition (D195); every bracket clears it except parentheses.
 
 #include "parser.h"
 #include <stdarg.h>
@@ -44,6 +45,11 @@ struct Parser
     // Bracket context (§2.6, §2.7).
     bool         inSpaceList;    // at the top level of a space-separated bracket
     bool         unitsAllowed;   // a spaced IDENT after a value literal is its unit
+    bool         inGuard;        // in a guard, outside any bracket but parentheses (D195)
+
+    // The last unit run taken, for the missing-';' hint (D197).
+    uint32_t     unitFirst;      // the run's first token
+    uint32_t     unitEnd;        // the token after the run
 
     Ast         *ast;
     ParseError  *error;
@@ -54,6 +60,7 @@ struct Context
 {
     bool inSpaceList;
     bool unitsAllowed;
+    bool inGuard;
 };
 
 // A sibling chain under construction: children are linked as they are
@@ -155,7 +162,7 @@ static bool canStartExpression( const Token *t )
     case TOK_NUMBER: case TOK_STRING: case TOK_IDENT:
     case TOK_LPAREN: case TOK_LBRACKET: case TOK_LBRACKET_LBRACKET: case TOK_LBRACKET_BAR:
     case TOK_LANGLE: case TOK_LANGLE_BAR: case TOK_LANGLE_LBRACKET:
-    case TOK_MINUS: case TOK_CARET:
+    case TOK_PLUS: case TOK_MINUS: case TOK_CARET:
         return true;
     default:
         return false;
@@ -167,6 +174,9 @@ static bool canStartExpression( const Token *t )
 //////////////////////////////////////////////////////////////////////////////
 
 // Record an error at token `t` and return false, for `return Parser_failAt(...)`.
+// An error right after a unit run that began on a new line gets a hint: the
+// run may be the next statement's name, read as a unit after a missing ';'
+// (D197).
 static bool Parser_failAt( Parser *p, const Token *t, const char *format, ... )
 {
     ParseError *e = p->error;
@@ -178,6 +188,14 @@ static bool Parser_failAt( Parser *p, const Token *t, const char *format, ... )
     va_start( args, format );
     vsnprintf( e->message, sizeof( e->message ), format, args );
     va_end( args );
+
+    uint32_t index = (uint32_t)( t - p->tokens );
+    if ( p->unitEnd != 0 && index == p->unitEnd && ( p->tokens[ p->unitFirst ].flags & LINE_BEFORE ) != 0 )
+    {
+        size_t used = strlen( e->message );
+        snprintf( e->message + used, sizeof( e->message ) - used,
+                  "; is a ';' missing at the end of the previous line? (D197)" );
+    }
     return false;
 }
 
@@ -334,11 +352,14 @@ static uint32_t Parser_makeSingle( Parser *p, NodeKind kind, uint32_t token, uin
     return Parser_makeParent( p, kind, token, firstToken, &children );
 }
 
+// Enter a bracket or block. It leaves any guard: only parentheses keep it,
+// and they set it again themselves (D195).
 static Context Parser_enterContext( Parser *p, bool inSpaceList, bool unitsAllowed )
 {
-    Context saved = { p->inSpaceList, p->unitsAllowed };
+    Context saved = { p->inSpaceList, p->unitsAllowed, p->inGuard };
     p->inSpaceList  = inSpaceList;
     p->unitsAllowed = unitsAllowed;
+    p->inGuard      = false;
     return saved;
 }
 
@@ -346,6 +367,7 @@ static void Parser_restoreContext( Parser *p, Context saved )
 {
     p->inSpaceList  = saved.inSpaceList;
     p->unitsAllowed = saved.unitsAllowed;
+    p->inGuard      = saved.inGuard;
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -444,6 +466,8 @@ static bool tryParseUnit( Parser *p, uint32_t *node )
         }
     }
 
+    p->unitFirst = first;
+    p->unitEnd   = Parser_index( p );
     *node = Parser_newNode( p, NODE_UNIT, first, first );
     return true;
 }
@@ -469,7 +493,8 @@ static bool tryParseUnitAfter( Parser *p, uint32_t value, uint32_t *node )
 // entries = entry { [ "," ] entry }, in a space-separated bracket. Stops in
 // front of `closer` or `closer2` (TOK_EOF when there is no second closer),
 // or after `max` entries when `max` is not 0. Quaternion components are
-// sums (§2.8), so with `sumsOnly` each entry is parsed as a sum.
+// sums (§2.8), so with `sumsOnly` each entry is parsed as a sum. The rule
+// numbers below are §2.7's.
 static bool tryParseEntries( Parser *p, Chain *entries, TokenKind closer, TokenKind closer2,
                              uint32_t max, bool sumsOnly )
 {
@@ -496,22 +521,24 @@ static bool tryParseEntries( Parser *p, Chain *entries, TokenKind closer, TokenK
         }
         if ( Parser_isAtCloser( p, closer ) || t->kind == closer2 ) return true;
 
-        // Rules 2 and 4 continue the entry, and the expression parser has
+        // Rule 4: a spaced '<' starts the next entry, a quaternion (D190).
+        // The entry's expression stopped in front of it.
+        if ( t->kind == TOK_LANGLE && isSpaced( t ) ) continue;
+
+        // Rules 2 and 5 continue the entry, and the expression parser has
         // already taken every operator it can. A comparison is what is left.
         if ( isComparison( t ) || Parser_isReserved( p, t, "and" ) || Parser_isReserved( p, t, "or" ) )
         {
-            return Parser_failAt( p, t, "a comparison is legal only in a 'when' guard%s",
-                                  t->kind == TOK_LANGLE ? "; separate quaternions in a list with commas" : "" );
+            return Parser_failAt( p, t, "a comparison is legal only in a 'when' guard" );
         }
 
-        // Rule 3 for '+': a sign, but there is no prefix '+' (Appendix A).
-        if ( t->kind == TOK_PLUS ) return Parser_failAt( p, t, "there is no prefix '+'" );
-
-        // Rule 5: a spaced token that can start an expression starts the next entry.
+        // Rules 3 and 6: a spaced token that can start an expression starts
+        // the next entry. A sign the sum left here is rule 3 (D191).
         if ( isSpaced( t ) && canStartExpression( t ) ) continue;
 
-        // Rule 6.
-        return Parser_failExpected( p, "',' or the end of the bracket" );
+        // Rule 7. `[a < b]` reads `< b` as an unclosed quaternion (D190).
+        return Parser_failExpected( p, closer == TOK_RANGLE ? "'>' to close the quaternion"
+                                                            : "',' or the end of the bracket" );
     }
 }
 
@@ -577,13 +604,37 @@ static bool tryParseCommaList( Parser *p, Chain *entries, TokenKind closer, Toke
 // Literals (§2.9)
 //////////////////////////////////////////////////////////////////////////////
 
+// In a guard, "(" guard ")" groups a condition (D195). Its first entry is read
+// at guard level; an arithmetic expression is a guard too, so `(a + b) < c`
+// groups as before, and a comma after the first entry makes a point.
+static bool tryParseGuardParens( Parser *p, Chain *entries )
+{
+    uint32_t first = 0;
+    if ( !tryParseGuard( p, &first ) ) return false;
+    Chain_append( p, entries, first );
+    if ( Parser_peek( p )->kind == TOK_RPAREN )
+    {
+        Parser_advance( p );
+        return true;
+    }
+    if ( !Parser_tryExpect( p, TOK_COMMA, "',' or ')'" ) ) return false;
+
+    // A point: its remaining entries are arithmetic, as outside a guard.
+    p->inGuard = false;
+    return tryParseCommaList( p, entries, TOK_RPAREN, TOK_EOF, ")", false );
+}
+
 // "(" args ")": one entry is grouping, three are a point (D132, D164).
 static bool tryParseParens( Parser *p, uint32_t *node )
 {
+    bool     guard = p->inGuard;
     uint32_t open  = Parser_advance( p );
     Chain    entries = {};
     Context  saved = Parser_enterContext( p, false, true );
-    if ( !tryParseCommaList( p, &entries, TOK_RPAREN, TOK_EOF, ")", false ) ) return false;
+    p->inGuard = guard;
+    bool parsed = guard ? tryParseGuardParens( p, &entries )
+                        : tryParseCommaList( p, &entries, TOK_RPAREN, TOK_EOF, ")", false );
+    if ( !parsed ) return false;
     Parser_restoreContext( p, saved );
 
     if ( entries.count == 1 )
@@ -669,7 +720,8 @@ static bool tryParseGrid( Parser *p, uint32_t *node )
     return tryParseUnitAfter( p, grid, node );
 }
 
-// half = three entries, then the half's unit run (D148).
+// half = three entries, then the half's unit: a unit run, or `1` for a
+// dimensionless half (D148, D194). The `1` is a UNIT node over the NUMBER.
 static bool tryParseHalf( Parser *p, uint32_t *node )
 {
     uint32_t start   = Parser_index( p );
@@ -680,10 +732,26 @@ static bool tryParseHalf( Parser *p, uint32_t *node )
         return Parser_failAt( p, &p->tokens[ start ], "a spatial-vector half has exactly three entries, "
                                                       "then its unit (D64, D148)" );
     }
-    if ( Parser_peek( p )->kind != TOK_IDENT ) return Parser_failExpected( p, "the half's unit (D148)" );
 
-    uint32_t unit = 0;
-    if ( !tryParseUnit( p, &unit ) ) return false;
+    uint32_t     unit = 0;
+    const Token *t    = Parser_peek( p );
+    if ( t->kind == TOK_NUMBER )
+    {
+        if ( !Parser_isText( p, t, "1" ) )
+        {
+            return Parser_failAt( p, t, "a half's unit is a unit name, or '1' for a dimensionless half (D194)" );
+        }
+        uint32_t i = Parser_advance( p );
+        unit = Parser_newNode( p, NODE_UNIT, i, i );
+    }
+    else if ( t->kind != TOK_IDENT )
+    {
+        return Parser_failExpected( p, "the half's unit, or '1' for a dimensionless half (D148, D194)" );
+    }
+    else if ( !tryParseUnit( p, &unit ) )
+    {
+        return false;
+    }
     Chain_append( p, &entries, unit );
     *node = Parser_makeParent( p, NODE_HALF, start, start, &entries );
     return true;
@@ -709,21 +777,27 @@ static bool tryParseSpatial( Parser *p, uint32_t *node )
     return true;
 }
 
-// "<" sum [ ";" entries ] ">" [ unit_run ]: <w> or <w; x y z> (D128, D131).
+// "<" entries [ ";" entries ] ">" [ unit_run ]: <w> or <w; x y z> (D128, D131).
+// A quaternion is space-separated throughout, so the sign rule applies before
+// the ';' too, and the scalar part is one entry by shape (D185).
 static bool tryParseQuaternion( Parser *p, uint32_t *node )
 {
     uint32_t open  = Parser_advance( p );
     Chain    parts = {};
-    Context  saved = Parser_enterContext( p, false, false );
+    Context  saved = Parser_enterContext( p, true, false );
 
-    uint32_t w = 0;
-    if ( !tryParseSum( p, &w ) ) return false;
-    Chain_append( p, &parts, w );
+    if ( !tryParseEntries( p, &parts, TOK_RANGLE, TOK_SEMICOLON, 0, true ) ) return false;
+    if ( parts.count == 0 ) return Parser_failExpected( p, "the quaternion's scalar part" );
+    if ( parts.count > 1 )
+    {
+        const Token *second = &p->tokens[ Parser_node( p, Parser_node( p, parts.first )->next )->firstToken ];
+        return Parser_failAt( p, second, "a quaternion has one scalar part; for a difference write it with "
+                                         "a space after the sign, as in <a - b>, or add ';' after the scalar (D185)" );
+    }
 
     if ( Parser_peek( p )->kind == TOK_SEMICOLON )
     {
         Parser_advance( p );
-        Parser_enterContext( p, true, false );
         if ( !tryParseEntries( p, &parts, TOK_RANGLE, TOK_EOF, 0, true ) ) return false;
         if ( parts.count != 4 )
         {
@@ -731,7 +805,7 @@ static bool tryParseQuaternion( Parser *p, uint32_t *node )
                                                          "with three entries after ';' (D128)" );
         }
     }
-    if ( !Parser_tryExpect( p, TOK_RANGLE, "'>' to close the quaternion (or ';' after w)" ) ) return false;
+    if ( !Parser_tryExpect( p, TOK_RANGLE, "'>' to close the quaternion" ) ) return false;
 
     Parser_restoreContext( p, saved );
     uint32_t quaternion = Parser_makeParent( p, NODE_QUATERNION, open, open, &parts );
@@ -809,24 +883,24 @@ static bool tryParseOrientation( Parser *p, uint32_t *node )
     return true;
 }
 
-// "<[" clist "]>": a point and an orientation, and no unit after (D148, D149).
+// "<[" expr "," expr "]>": a point and an orientation, with no labels and no
+// unit after (D148, D149, D196).
 static bool tryParseFrame( Parser *p, uint32_t *node )
 {
     uint32_t open    = Parser_advance( p );
     Chain    entries = {};
     Context  saved   = Parser_enterContext( p, false, true );
+
+    // Labels are read so that one can be reported as a label (D196).
     if ( !tryParseCommaList( p, &entries, TOK_RBRACKET, TOK_RANGLE, "]>", true ) ) return false;
     Parser_restoreContext( p, saved );
 
-    // Appendix A lets a frame entry carry a label, but a label here is not
-    // an Euler label, so it may not be primed (§1.4).
     for ( uint32_t c = entries.first ; entries.count > 0 && c != 0 ; c = Parser_node( p, c )->next )
     {
-        const Token *label = &p->tokens[ Parser_node( p, c )->token ];
-        if ( Parser_node( p, c )->kind == NODE_PROPERTY && Parser_isPrimed( p, label ) )
+        if ( Parser_node( p, c )->kind == NODE_PROPERTY )
         {
-            return Parser_failAt( p, label, "a primed name is legal only as an Euler axis label, "
-                                            "as in <| Z: a, Y': b, X'': c |> (D120)" );
+            return Parser_failAt( p, &p->tokens[ Parser_node( p, c )->token ],
+                                  "a frame entry takes no label; labels name Euler axes in <| |> (D196)" );
         }
     }
 
@@ -917,9 +991,6 @@ static bool tryParsePrimary( Parser *p, uint32_t *node )
         return Parser_failAt( p, t, "'<-' is the drive arrow; a quaternion with a negative scalar "
                                     "is written '< -w; x y z>' (D155)" );
 
-    case TOK_PLUS:
-        return Parser_failAt( p, t, "there is no prefix '+'" );
-
     case TOK_KEYWORD:
         if ( Parser_isText( p, t, "not" ) || Parser_isText( p, t, "and" ) || Parser_isText( p, t, "or" ) )
         {
@@ -971,11 +1042,11 @@ static bool tryParsePostfix( Parser *p, uint32_t *node )
     }
 }
 
-// prefix = ( "-" | "^" ) prefix | postfix
+// prefix = ( "+" | "-" | "^" ) prefix | postfix   (prefix '+', D191)
 static bool tryParsePrefix( Parser *p, uint32_t *node )
 {
     const Token *t = Parser_peek( p );
-    if ( t->kind == TOK_MINUS || t->kind == TOK_CARET )
+    if ( t->kind == TOK_PLUS || t->kind == TOK_MINUS || t->kind == TOK_CARET )
     {
         uint32_t op = Parser_advance( p );
         uint32_t operand = 0;
@@ -1061,14 +1132,15 @@ static bool tryParseExpr( Parser *p, uint32_t *node )
     if ( !tryParseRange( p, node ) ) return false;
 
     const Token *t = Parser_peek( p );
+
+    // In a space-separated bracket, a spaced '<' starts the next entry, a
+    // quaternion (§2.7 rule 4, D190), so the entry ends here.
+    if ( p->inSpaceList && t->kind == TOK_LANGLE && isSpaced( t ) ) return true;
+
     if ( isComparison( t ) || Parser_isReserved( p, t, "and" ) || Parser_isReserved( p, t, "or" ) )
     {
-        // In a list, a spaced '<' after an entry continues it as a
-        // comparison (§2.7 rule 4), so quaternions there need commas.
-        bool inList = p->inSpaceList && t->kind == TOK_LANGLE;
-        return Parser_failAt( p, t, "'%.*s' is legal only in a 'when' guard (D133)%s",
-                              (int)t->len, p->text + t->offset,
-                              inList ? "; separate quaternions in a list with commas" : "" );
+        return Parser_failAt( p, t, "'%.*s' is legal only in a 'when' guard (D133)",
+                              (int)t->len, p->text + t->offset );
     }
     return true;
 }
@@ -1277,7 +1349,7 @@ static bool tryParseSystem( Parser *p, uint32_t *node )
     return true;
 }
 
-// endpoint = lhs { "." IDENT }
+// endpoint = lhs { "." IDENT }, and a slot has the same shape (D181, D182)
 static bool tryParseEndpoint( Parser *p, uint32_t *node )
 {
     if ( !tryParseLhs( p, node ) ) return false;
@@ -1291,7 +1363,9 @@ static bool tryParseEndpoint( Parser *p, uint32_t *node )
     return true;
 }
 
-// chain_stmt = endpoint "<" lhs ">" endpoint { "<" lhs ">" endpoint } [ for_clause ] ";"
+// chain_stmt = endpoint "<" slot ">" endpoint { "<" slot ">" endpoint } [ for_clause ] ";"
+// A slot is a path like an endpoint, so it may reach a nested system's
+// connector (D181).
 static bool tryParseChain( Parser *p, uint32_t *node )
 {
     uint32_t first = Parser_index( p );
@@ -1309,7 +1383,7 @@ static bool tryParseChain( Parser *p, uint32_t *node )
     {
         uint32_t open = Parser_advance( p );
         uint32_t connector = 0;
-        if ( !tryParseLhs( p, &connector ) ) return false;
+        if ( !tryParseEndpoint( p, &connector ) ) return false;
         if ( !Parser_tryExpect( p, TOK_RANGLE, "'>' to close the connector slot" ) ) return false;
         Chain_append( p, &parts, Parser_makeSingle( p, NODE_SLOT, open, open, connector ) );
 
@@ -1351,7 +1425,10 @@ static bool tryParseWhen( Parser *p, uint32_t *node )
     uint32_t keyword = Parser_advance( p );
     Chain    parts   = {};
     uint32_t guard = 0;
-    if ( !tryParseGuard( p, &guard ) ) return false;
+    p->inGuard = true;
+    bool parsed = tryParseGuard( p, &guard );
+    p->inGuard = false;
+    if ( !parsed ) return false;
     Chain_append( p, &parts, guard );
     if ( !Parser_tryExpect( p, TOK_MINUS_RANGLE, "'->' and the next state" ) ) return false;
     uint32_t target = 0;
@@ -1438,17 +1515,42 @@ static bool tryParseStatement( Parser *p, BlockMode mode, uint32_t *node )
     const Token *t    = Parser_peek( p );
     const Token *next = Parser_peekNext( p );
 
+    // The shape follows the block's name alone (D192), so a block named
+    // `assembly` or `states` always takes that block's form. A statement that
+    // doesn't fit says the name is reserved.
     switch ( mode )
     {
     case MODE_ASSEMBLY:
+        if ( t->kind == TOK_IDENT && ( next->kind == TOK_COLON || next->kind == TOK_EQUAL || next->kind == TOK_LBRACE ) )
+        {
+            return Parser_failAt( p, t, "an 'assembly' block holds only chain lines, 'a <connector> b;'; the name "
+                                        "'assembly' is reserved for that block and can't name a body or other block (D192)" );
+        }
         return tryParseChain( p, node );
 
     case MODE_STATES:
-        if ( t->kind == TOK_IDENT && next->kind == TOK_LBRACE ) return tryParseScope( p, MODE_STATE, node );
-        return Parser_failAt( p, t, "a 'states' block holds only states, written 'name { … }' (D78)" );
+        if ( t->kind == TOK_IDENT && next->kind == TOK_LBRACE )
+        {
+            if ( Parser_isText( p, t, "assembly" ) || Parser_isText( p, t, "states" ) )
+            {
+                return Parser_failAt( p, t, "'%.*s' is reserved for its block form and can't name a state (D192)",
+                                      (int)t->len, p->text + t->offset );
+            }
+            return tryParseScope( p, MODE_STATE, node );
+        }
+        return Parser_failAt( p, t, "a 'states' block holds only states, written 'name { … }' (D78); the name "
+                                    "'states' is reserved for that block and can't name a body or other block (D192)" );
 
     case MODE_STATE:
-        if ( Parser_isWord( p, t, "when" ) ) return tryParseWhen( p, node );
+        if ( Parser_isWord( p, t, "when" ) )
+        {
+            if ( next->kind == TOK_COLON )
+            {
+                return Parser_failAt( p, t, "in a state, 'when' starts a transition, so an fsm output "
+                                            "can't be named 'when' (D192)" );
+            }
+            return tryParseWhen( p, node );
+        }
         break;
 
     case MODE_MAP:
@@ -1673,6 +1775,9 @@ bool tryParse( const Source *source, const TokenArray *tokens, Ast *ast, ParseEr
     p.lastConsumed = 0;
     p.inSpaceList  = false;
     p.unitsAllowed = true;
+    p.inGuard      = false;
+    p.unitFirst    = 0;
+    p.unitEnd      = 0;
     p.ast          = ast;
     p.error        = error;
 

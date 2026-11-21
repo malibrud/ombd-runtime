@@ -198,7 +198,8 @@ static TokenCase moreTokenCases[] =
 
     // words (§1.4)
     { "for and or not mod",            "KEYWORD(for) ·KEYWORD(and) ·KEYWORD(or) ·KEYWORD(not) ·KEYWORD(mod)" },
-    { "form android For _for for'",    "IDENT(form) ·IDENT(android) ·IDENT(For) ·IDENT(_for) ·IDENT(for')" },
+    { "form android For _for fork",    "IDENT(form) ·IDENT(android) ·IDENT(For) ·IDENT(_for) ·IDENT(fork)" },
+    { "form' For' fork''",             "IDENT(form') ·IDENT(For') ·IDENT(fork'')" },   // only a keyword refuses primes (D189)
     { "_ _a a_1 bRod brod",            "IDENT(_) ·IDENT(_a) ·IDENT(a_1) ·IDENT(bRod) ·IDENT(brod)" },
     { "<|Z: 6, Y': 3, X'': 6|>",
       "<| IDENT(Z) : ·NUMBER(6) , ·IDENT(Y') : ·NUMBER(3) , ·IDENT(X'') : ·NUMBER(6) | >" },
@@ -226,7 +227,6 @@ static TokenCase moreTokenCases[] =
     { "\"a·b μ\"",                     "STRING(a·b μ)" },
     { "\"/* not a comment */\"",       "STRING(/* not a comment */)" },
     { "\"// nor this\"",               "STRING(// nor this)" },
-    { "\"a\tb\"",                      "STRING(a\tb)" },
     { "\"x\"y",                        "STRING(x) IDENT(y)" },
 
     // comments (§1.3)
@@ -479,6 +479,10 @@ static ErrorCase errorCases[] =
     { "\"a\\b\"",             0, LEX_BACKSLASH_IN_STRING,  1, 3 },
     { "#",                    0, LEX_BAD_PUNCTUATION,      1, 1 },
     { "μ = 1;",               0, LEX_NON_ASCII,            1, 1 },
+    { "/*/ x",                0, LEX_UNTERMINATED_COMMENT, 1, 1 },    // markers never overlap (D187)
+    { "\"abc",                0, LEX_UNTERMINATED_STRING,  1, 1 },    // the end of the file (D187)
+    { "\"a\tb\"",             0, LEX_CONTROL_BYTE,         1, 3 },    // a tab in a string (D188)
+    { "for'",                 0, LEX_STRAY_PRIME,          1, 4 },    // a keyword takes no prime (D189)
 
     // 1. control bytes, anywhere
     { "a\x01",                0, LEX_CONTROL_BYTE,         1, 2 },
@@ -492,6 +496,12 @@ static ErrorCase errorCases[] =
     { "/*\n\x03*/",           0, LEX_CONTROL_BYTE,         2, 1 },
     { "\"a\x04\"",            0, LEX_CONTROL_BYTE,         1, 3 },
     { "\"a\x7F\"",            0, LEX_CONTROL_BYTE,         1, 3 },
+    // tab and \r: whitespace outside a string, errors inside one (D188)
+    { "\"\t\"",               0, LEX_CONTROL_BYTE,         1, 2 },
+    { "\"a\rb\"",             0, LEX_CONTROL_BYTE,         1, 3 },
+    { "x\t= \"a b\tc\"",      0, LEX_CONTROL_BYTE,         1, 9 },
+    { "\"a\r\n",              0, LEX_CONTROL_BYTE,         1, 3 },    // the first error wins (D187)
+    { "\"\t\\\"",             0, LEX_CONTROL_BYTE,         1, 2 },    // the tab comes before the backslash
 
     // 2. non-ASCII outside a comment or string
     { "x\n  μ",               0, LEX_NON_ASCII,            2, 3 },
@@ -521,7 +531,7 @@ static ErrorCase errorCases[] =
     // 5. unterminated string, at its opening quote
     { "\"abc\nx\"",           0, LEX_UNTERMINATED_STRING,  1, 1 },
     { "x = \"abc",            0, LEX_UNTERMINATED_STRING,  1, 5 },
-    { "a\r\n  \"b\r\n",       0, LEX_UNTERMINATED_STRING,  2, 3 },
+    { "a\r\n  \"b\n",         0, LEX_UNTERMINATED_STRING,  2, 3 },
     { "\"",                   0, LEX_UNTERMINATED_STRING,  1, 1 },
 
     // 6. a backslash in a string, at the backslash (before any later error)
@@ -545,6 +555,11 @@ static ErrorCase errorCases[] =
     { "Y' '",                 0, LEX_STRAY_PRIME,          1, 4 },
     { "5'",                   0, LEX_STRAY_PRIME,          1, 2 },
     { "\"a\"'",               0, LEX_STRAY_PRIME,          1, 4 },
+    // a keyword never takes a prime (D189)
+    { "and''",                0, LEX_STRAY_PRIME,          1, 4 },
+    { "x mod' y",             0, LEX_STRAY_PRIME,          1, 6 },
+    { "a or'",                0, LEX_STRAY_PRIME,          1, 5 },
+    { "not' x",               0, LEX_STRAY_PRIME,          1, 4 },
 
     // 10. other ASCII punctuation
     { "$",                    0, LEX_BAD_PUNCTUATION,      1, 1 },
