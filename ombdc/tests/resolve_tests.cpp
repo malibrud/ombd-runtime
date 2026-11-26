@@ -69,6 +69,20 @@ static uint32_t test_makeUnits( Unit *units, const char *text1, const char *text
     return 2;
 }
 
+// A type or assembly case is a model, which states its gravity (D184). Unless
+// the case sets its own, the gravity is loaded as a second text, so that the
+// case's positions stay as written. Returns the count, or 0.
+static uint32_t test_makeModelUnits( Unit *units, const char *text )
+{
+    const char *gravity = strstr( text, "gravity:" ) != NULL ? NULL : "gravity: [0, 0, -1] m/s2;";
+    return test_makeUnits( units, text, gravity );
+}
+
+static void test_freeUnits( Unit *units, uint32_t count )
+{
+    for ( uint32_t u = 0 ; u < count ; u++ ) test_freeUnit( &units[u] );
+}
+
 static void test_showText( char *out, uint32_t size, const char *text )
 {
     uint32_t n = 0;
@@ -95,6 +109,7 @@ static void test_ownerOf( const Model *m, const Symbol *s, const char **name, in
     const Scope *scope = &m->scopes[ s->scope ];
     if ( scope->kind == SCOPE_BUILTIN ) { *name = "builtin"; *length = 7; return; }
     if ( scope->kind == SCOPE_TOP )     { *name = "top";     *length = 3; return; }
+    if ( scope->kind == SCOPE_SIMULATION ) { *name = "simulation"; *length = 10; return; }
     const Symbol *owner = &m->symbols[ scope->owner ];
     *name   = owner->name;
     *length = (int)owner->length;
@@ -135,7 +150,7 @@ static void test_referenceWalk( const Model *m, uint32_t unit, uint32_t index, c
     const Unit     *u    = &m->units[ unit ];
     const NodeInfo *info = &u->info[ index ];
     bool isReference = info->role == ROLE_REFERENCE || info->role == ROLE_FUNCTION || info->role == ROLE_CONNECTOR
-                    || info->role == ROLE_TYPE_HEAD || info->role == ROLE_PUBLISHED;
+                    || info->role == ROLE_TYPE_HEAD || info->role == ROLE_PUBLISHED || info->role == ROLE_DEPENDENCY;
     if ( isReference )
     {
         const Symbol *s = &m->symbols[ info->symbol ];
@@ -161,6 +176,10 @@ static void test_referenceSummary( const Model *m, char *out, uint32_t size )
 // Successful loads
 //////////////////////////////////////////////////////////////////////////////
 
+// A model states its gravity (D184). A case that is a model starts with this,
+// so that it shows only what it tests.
+#define TEST_GRAVITY "gravity: [0, 0, -1] m/s2;\n"
+
 struct LoadCase
 {
     const char *text1;
@@ -174,10 +193,10 @@ static LoadCase loadCases[] =
 {
     // the root (§3.1, D139)
     { "", NULL, NULL, "", "" },
-    { "system s { }", NULL, "s", "SYSTEM s@top", "" },
-    { "namespace { system s { } }", NULL, "s", "SYSTEM s@top", "" },
+    { TEST_GRAVITY "system s { }", NULL, "s", "SYSTEM s@top", "" },
+    { TEST_GRAVITY "namespace { system s { } }", NULL, "s", "SYSTEM s@top", "" },
     { "namespace a { system s { } }", NULL, NULL, "NAMESPACE a@top SYSTEM s@a", "" },
-    { "namespace a { system x { } }\nsystem s { }", NULL, "s", "NAMESPACE a@top SYSTEM x@a SYSTEM s@top", "" },
+    { TEST_GRAVITY "namespace a { system x { } }\nsystem s { }", NULL, "s", "NAMESPACE a@top SYSTEM x@a SYSTEM s@top", "" },
 
     // merging texts (§3.1, D11, D12)
     { "gravity: [0, 0, -1];", "system s { }", "s", "SYSTEM s@top", "" },
@@ -189,70 +208,107 @@ static LoadCase loadCases[] =
       "NAMESPACE a@top NAMESPACE b@a SYSTEM x@b", "x->SYSTEM@b" },
 
     // sections are not scopes, and order does not matter (§0, §3.2, D22)
-    { "system s {\npoints { p = (0, 0, 0); q = p; }\nsignals { r = q; }\n}", NULL, "s",
+    { TEST_GRAVITY "system s {\npoints { p = (0, 0, 0); q = p; }\nsignals { r = q; }\n}", NULL, "s",
       "SYSTEM s@top VALUE p@s VALUE q@s VALUE r@s", "p->VALUE@s q->VALUE@s" },
-    { "system s {\nsignals { r = q; }\npoints { q = 1; }\npoints { t = 2; }\n}", NULL, "s",
+    { TEST_GRAVITY "system s {\nsignals { r = q; }\npoints { q = 1; }\npoints { t = 2; }\n}", NULL, "s",
       "SYSTEM s@top VALUE r@s VALUE q@s VALUE t@s", "q->VALUE@s" },
 
     // bodies: lookup runs outward, and an inner name hides an outer one
-    { "system s {\nbodies { b { cg: p; mass: 1; inertia: 1; } }\npoints { p = (0, 0, 0); }\n}", NULL, "s",
+    { TEST_GRAVITY "system s {\nbodies { b { cg: p; mass: 1; inertia: 1; } }\npoints { p = (0, 0, 0); }\n}", NULL, "s",
       "SYSTEM s@top BODY b@s VALUE p@s", "p->VALUE@s" },
-    { "system s {\nbodies { b { points { q = (0, 0, 0); } cg: q; mass: 1; inertia: 1; } }\n}", NULL, "s",
+    { TEST_GRAVITY "system s {\nbodies { b { points { q = (0, 0, 0); } cg: q; mass: 1; inertia: 1; } }\n}", NULL, "s",
       "SYSTEM s@top BODY b@s VALUE q@b", "q->VALUE@b" },
-    { "system s {\np = 1;\nbodies { b { points { p = 2; } cg: p; mass: 1; inertia: 1; } }\n}", NULL, "s",
+    { TEST_GRAVITY "system s {\np = 1;\nbodies { b { points { p = 2; } cg: p; mass: 1; inertia: 1; } }\n}", NULL, "s",
       "SYSTEM s@top VALUE p@s BODY b@s VALUE p@b", "p->VALUE@b" },
-    { "system s {\nbodies { a { mass: 1; cg: (0, 0, 0); inertia: 1; } b { mass: 1; cg: (0, 0, 0); inertia: 1; } }\n}", NULL, "s", "SYSTEM s@top BODY a@s BODY b@s", "" },
+    { TEST_GRAVITY "system s {\nbodies { a { mass: 1; cg: (0, 0, 0); inertia: 1; } b { mass: 1; cg: (0, 0, 0); inertia: 1; } }\n}", NULL, "s", "SYSTEM s@top BODY a@s BODY b@s", "" },
 
     // properties of each element
-    { "system s {\nunits: m, kg;\n}", NULL, "s", "SYSTEM s@top", "" },
-    { "system s {\nbodies { b { mass: 10 kg; inertia: diag(1, 2, 3) kg-m2; cg: (0, 0, 0) m; } }\n}", NULL, "s",
+    { TEST_GRAVITY "system s {\nunits: m, kg;\n}", NULL, "s", "SYSTEM s@top", "" },
+    { TEST_GRAVITY "system s {\nbodies { b { mass: 10 kg; inertia: diag(1, 2, 3) kg-m2; cg: (0, 0, 0) m; } }\n}", NULL, "s",
       "SYSTEM s@top BODY b@s", "diag->BUILTIN_FUNCTION@builtin" },
 
     // instances of a built-in type, in line and block form (D152)
-    { "system s {\np = (0, 0, 0);\nj: revolute, at: p, axis: [0, 1, 0];\n}", NULL, "s",
+    { TEST_GRAVITY "system s {\np = (0, 0, 0);\nj: revolute, at: p, axis: [0, 1, 0];\n}", NULL, "s",
       "SYSTEM s@top VALUE p@s INSTANCE j@s:revolute", "revolute->BUILTIN_TYPE@builtin p->VALUE@s" },
-    { "system s {\np = (0, 0, 0);\nj: revolute { at: p; axis: [0, 1, 0]; }\n}", NULL, "s",
+    { TEST_GRAVITY "system s {\np = (0, 0, 0);\nj: revolute { at: p; axis: [0, 1, 0]; }\n}", NULL, "s",
       "SYSTEM s@top VALUE p@s INSTANCE j@s:revolute", "revolute->BUILTIN_TYPE@builtin p->VALUE@s" },
-    { "system s {\np = 1;\nc: TSDA, rate: 1, free: 2, p1: p, p2: p;\n}", NULL, "s",
+    { TEST_GRAVITY "system s {\np = 1;\nc: TSDA, rate: 1, free: 2, p1: p, p2: p;\n}", NULL, "s",
       "SYSTEM s@top VALUE p@s INSTANCE c@s:TSDA", "TSDA->BUILTIN_TYPE@builtin p->VALUE@s p->VALUE@s" },
 
     // shared definitions, in either order and either form (D142, D152)
-    { "system s {\nc: coil, p1: a, p2: a;\ncoil = TSDA, rate: 1, free: 2;\na = 1;\n}", NULL, "s",
+    { TEST_GRAVITY "system s {\nc: coil, p1: a, p2: a;\ncoil = TSDA, rate: 1, free: 2;\na = 1;\n}", NULL, "s",
       "SYSTEM s@top INSTANCE c@s:TSDA DEFINITION coil@s:TSDA VALUE a@s",
       "coil->DEFINITION@s a->VALUE@s a->VALUE@s TSDA->BUILTIN_TYPE@builtin" },
-    { "system s {\ncoil = TSDA { rate: 1; free: 2; }\na = 1;\nc: coil { p1: a; p2: a; }\n}", NULL, "s",
+    { TEST_GRAVITY "system s {\ncoil = TSDA { rate: 1; free: 2; }\na = 1;\nc: coil { p1: a; p2: a; }\n}", NULL, "s",
       "SYSTEM s@top DEFINITION coil@s:TSDA VALUE a@s INSTANCE c@s:TSDA",
       "TSDA->BUILTIN_TYPE@builtin coil->DEFINITION@s a->VALUE@s a->VALUE@s" },
-    { "system s {\nd = TSDA, damping: 3;\n}", NULL, "s", "SYSTEM s@top DEFINITION d@s:TSDA", "TSDA->BUILTIN_TYPE@builtin" },
+    { TEST_GRAVITY "system s {\nd = TSDA, damping: 3;\n}", NULL, "s", "SYSTEM s@top DEFINITION d@s:TSDA", "TSDA->BUILTIN_TYPE@builtin" },
 
     // an instance or value may share a type's name (D144)
-    { "system s {\na = 1;\nrevolute: revolute, at: a, axis: a;\n}", NULL, "s",
+    { TEST_GRAVITY "system s {\na = 1;\nrevolute: revolute, at: a, axis: a;\n}", NULL, "s",
       "SYSTEM s@top VALUE a@s INSTANCE revolute@s:revolute", "revolute->BUILTIN_TYPE@builtin a->VALUE@s a->VALUE@s" },
-    { "system s {\nTSDA = 1;\n}", NULL, "s", "SYSTEM s@top VALUE TSDA@s", "" },
+    { TEST_GRAVITY "system s {\nTSDA = 1;\n}", NULL, "s", "SYSTEM s@top VALUE TSDA@s", "" },
 
     // nested systems (D138)
-    { "system a {\nsystem b { p = 1; q = p; }\n}", NULL, "a",
+    { TEST_GRAVITY "system a {\nsystem b { p = 1; q = p; }\n}", NULL, "a",
       "SYSTEM a@top SYSTEM b@a VALUE p@b VALUE q@b", "p->VALUE@b" },
 
     // expressions look names up by position (§3.2)
-    { "system s {\nx = sin(2 * pi * time) + y;\ny = 1;\n}", NULL, "s",
+    { TEST_GRAVITY "system s {\nx = sin(2 * pi * time) + y;\ny = 1;\n}", NULL, "s",
       "SYSTEM s@top VALUE x@s VALUE y@s",
       "sin->BUILTIN_FUNCTION@builtin pi->BUILTIN_VALUE@builtin time->BUILTIN_VALUE@builtin y->VALUE@s" },
-    { "system s {\nx = 3 kg;\ny = [1 2 3] m/s2;\n}", NULL, "s", "SYSTEM s@top VALUE x@s VALUE y@s", "" },
-    { "system s {\na = 1;\nb = 2;\nc = 3;\no = <| Z: a, Y': b, X'': c |>;\n}", NULL, "s",
+    { TEST_GRAVITY "system s {\nx = 3 kg;\ny = [1 2 3] m/s2;\n}", NULL, "s", "SYSTEM s@top VALUE x@s VALUE y@s", "" },
+    { TEST_GRAVITY "system s {\na = 1;\nb = 2;\nc = 3;\no = <| Z: a, Y': b, X'': c |>;\n}", NULL, "s",
       "SYSTEM s@top VALUE a@s VALUE b@s VALUE c@s VALUE o@s", "a->VALUE@s b->VALUE@s c->VALUE@s" },
 
     // only a path's first name is resolved so far
-    { "system s {\nbodies { b { mass: 1; cg: (0, 0, 0); inertia: 1; } }\nx = b.cg.pos.x;\n}", NULL, "s", "SYSTEM s@top BODY b@s VALUE x@s", "b->BODY@s" },
+    { TEST_GRAVITY "system s {\nbodies { b { mass: 1; cg: (0, 0, 0); inertia: 1; } }\nx = b.cg.pos.x;\n}", NULL, "s", "SYSTEM s@top BODY b@s VALUE x@s", "b->BODY@s" },
 
     // drives, bare references and chains
-    { "system s {\nj: revolute, at: a, axis: a;\na = 1;\nj.angle.pos <- a;\n}", NULL, "s",
+    { TEST_GRAVITY "system s {\nj: revolute, at: a, axis: a;\na = 1;\nj.angle.pos <- a;\n}", NULL, "s",
       "SYSTEM s@top INSTANCE j@s:revolute VALUE a@s",
       "revolute->BUILTIN_TYPE@builtin a->VALUE@s a->VALUE@s j->INSTANCE@s a->VALUE@s" },
-    { "system s {\noutputs_x = 1;\nsignals { outputs_x; }\n}", NULL, "s", "SYSTEM s@top VALUE outputs_x@s", "outputs_x->VALUE@s" },
-    { "system s {\na = 1;\nj: revolute, at: a, axis: a;\nbodies { b { mass: 1; cg: (0, 0, 0); inertia: 1; } }\nassembly { world <j> b; }\n}", NULL, "s",
+    { TEST_GRAVITY "system s {\noutputs_x = 1;\nsignals { outputs_x; }\n}", NULL, "s", "SYSTEM s@top VALUE outputs_x@s", "outputs_x->VALUE@s" },
+    { TEST_GRAVITY "system s {\na = 1;\nj: revolute, at: a, axis: a;\nbodies { b { mass: 1; cg: (0, 0, 0); inertia: 1; } }\nassembly { world <j> b; }\n}", NULL, "s",
       "SYSTEM s@top VALUE a@s INSTANCE j@s:revolute BODY b@s",
       "revolute->BUILTIN_TYPE@builtin a->VALUE@s a->VALUE@s world->BUILTIN_VALUE@builtin j->INSTANCE@s b->BODY@s" },
+
+    // a slot may hold a built-in connector type, written directly (D170)
+    { TEST_GRAVITY "system s {\nbodies { b { mass: 1; cg: (0, 0, 0); inertia: 1; } }\nassembly { world <lock> b; }\n}", NULL, "s",
+      "SYSTEM s@top BODY b@s", "world->BUILTIN_VALUE@builtin lock->BUILTIN_TYPE@builtin b->BODY@s" },
+
+    // an assembly line reaches into nested systems by path, at any depth (D181, D182)
+    { TEST_GRAVITY "system s {\nsystem t {\nbodies { u { mass: 1; cg: (0, 0, 0); inertia: 1; } }\nj: revolute, at: 1, axis: 1;\n}\n"
+      "bodies { b { mass: 1; cg: (0, 0, 0); inertia: 1; } }\nassembly { b <t.j> t.u; }\n}", NULL, "s",
+      "SYSTEM s@top SYSTEM t@s BODY b@s BODY u@t INSTANCE j@t:revolute",
+      "revolute->BUILTIN_TYPE@builtin b->BODY@s j->INSTANCE@t t->SYSTEM@s u->BODY@t t->SYSTEM@s" },
+    { TEST_GRAVITY "system s {\nsystem t {\nsystem v {\nj: revolute, at: 1, axis: 1;\n}\n}\nassembly { world <t.v.j> world; }\n}", NULL, "s",
+      "SYSTEM s@top SYSTEM t@s SYSTEM v@t INSTANCE j@v:revolute",
+      "revolute->BUILTIN_TYPE@builtin world->BUILTIN_VALUE@builtin j->INSTANCE@v t->SYSTEM@s v->SYSTEM@t world->BUILTIN_VALUE@builtin" },
+
+    // a refinement takes its base's type, in either order and form, to any depth (D200)
+    { TEST_GRAVITY "system s {\nstiff = coil, rate: 2;\ncoil = TSDA, rate: 1, free: 2;\na = 1;\nc: stiff, p1: a, p2: a;\n}", NULL, "s",
+      "SYSTEM s@top DEFINITION stiff@s:TSDA DEFINITION coil@s:TSDA VALUE a@s INSTANCE c@s:TSDA",
+      "coil->DEFINITION@s TSDA->BUILTIN_TYPE@builtin stiff->DEFINITION@s a->VALUE@s a->VALUE@s" },
+    { TEST_GRAVITY "system s {\nc2 = c1 { damping: 3; }\nc1 = c0, rate: 2;\nc0 = TSDA, rate: 1;\n}", NULL, "s",
+      "SYSTEM s@top DEFINITION c2@s:TSDA DEFINITION c1@s:TSDA DEFINITION c0@s:TSDA",
+      "c1->DEFINITION@s c0->DEFINITION@s TSDA->BUILTIN_TYPE@builtin" },
+    { TEST_GRAVITY "system s {\ncoil = TSDA, rate: 1;\nbodies { b { mass: 1; cg: 1; inertia: 1; points { soft = coil, rate: 0.5; } } }\n}", NULL, "s",
+      "SYSTEM s@top DEFINITION coil@s:TSDA BODY b@s DEFINITION soft@b:TSDA", "TSDA->BUILTIN_TYPE@builtin coil->DEFINITION@s" },
+
+    // an instance or a value may take a unit's name; only a definition may not (D177)
+    { TEST_GRAVITY "system s {\ng = 9.81;\nm: TSDA, rate: 1, free: 2, p1: g, p2: g;\n}", NULL, "s",
+      "SYSTEM s@top VALUE g@s INSTANCE m@s:TSDA", "TSDA->BUILTIN_TYPE@builtin g->VALUE@s g->VALUE@s" },
+
+    // `simulation` is a scope under the root system, wherever it is written (D176)
+    { TEST_GRAVITY "system s {\nx = 1;\n}\nsimulation {\nunits: in;\nhorizon: 1 s;\nsignals { y = x; }\noutputs { update: 1 ms; x; y; }\n}",
+      NULL, "s", "SYSTEM s@top VALUE x@s VALUE y@simulation", "x->VALUE@s x->VALUE@s y->VALUE@simulation" },
+    { "simulation { y = x; }", TEST_GRAVITY "system s { x = 1; }", "s", "SYSTEM s@top VALUE x@s VALUE y@simulation", "x->VALUE@s" },
+
+    // every `use` names a loaded namespace or a provided system (D202)
+    { "namespace lib { system x { } provides x; }", "namespace app { use lib; use lib.x; }", NULL,
+      "NAMESPACE lib@top SYSTEM x@lib NAMESPACE app@top", "x->SYSTEM@lib lib->NAMESPACE@top x->SYSTEM@lib" },
+    { "namespace a.b { }\nnamespace c { use a.b; }", NULL, NULL, "NAMESPACE a@top NAMESPACE b@a NAMESPACE c@top", "b->NAMESPACE@a" },
 };
 
 static void test_loadCases( void )
@@ -345,7 +401,24 @@ static LoadErrorCase loadErrorCases[] =
     { "gravity: 1;\ngravity: 2;", NULL,              0, 2, 1,  "more than once" },
     { "gravity: 1;", "gravity: 2;",                  1, 1, 1,  "more than once" },
     { "simulation { }\nsimulation { }", NULL,        0, 2, 1,  "more than one 'simulation'" },
-    { "simulation { }", NULL,                        0, 1, 1,  "not implemented yet: a 'simulation' block" },
+    { "simulation { }", NULL,                        0, 1, 1,  "a 'simulation' block needs a model, and the top level holds no system" },
+
+    // a model states its gravity, after every other load error (D184)
+    { "system s { }", NULL,                          0, 1, 8,  "the model states no 'gravity:'; state it once at the top level" },
+    { "system s {\nbodies { b { } }\n}", NULL,      0, 2, 10, "'b' is missing the required property 'mass'" },
+
+    // `simulation` is a child scope of the root system (D176)
+    { "system s {\nx = 1;\n}\nsimulation {\nx = 2;\n}", NULL, 0, 5, 1, "'x' is already declared in the root system 's', at a.ombd:2:1; 'simulation' may not reuse its names (D176)" },
+    { "system s {\nx = 1;\n}", "simulation {\nsignals { x = 2; }\n}", 1, 2, 11, "already declared in the root system 's', at a.ombd:2:1" },
+    { "system s {\nbodies { b { points { q = 1; } } }\n}\nsimulation {\ny = q;\n}", NULL, 0, 5, 5, "unknown name 'q'" },
+    { "system s {\nsystem t { p = 1; }\n}\nsimulation { y = p; }", NULL, 0, 4, 18, "unknown name 'p'" },
+    { "system s { }\nsimulation {\nwidgets { }\n}", NULL, 0, 3, 1,  "'widgets' is not a section of 'simulation'" },
+    { "system s { }\nsimulation {\noutputs { x = 1; }\n}", NULL, 0, 3, 11, "an 'outputs' block holds 'update:' and the paths to record" },
+    { "system s { }\nsimulation {\noutputs { rate: 1; }\n}", NULL, 0, 3, 11, "an 'outputs' block holds 'update:'" },
+    { "system s { }\nsimulation {\noutputs { update: 1 ms; update: 2 ms; }\n}", NULL, 0, 3, 25, "property 'update' is set twice" },
+    { "system s { }\nsimulation {\nhorizon: 1 s;\nsignals { horizon: 2 s; }\n}", NULL, 0, 4, 11, "property 'horizon' is set twice" },
+    { "system s { }\nsimulation {\nsystem t { }\n}", NULL, 0, 3, 1, "a system may not be declared inside 'simulation'" },
+    { "system s { }\nsimulation {\nwidth: 2;\n}", NULL, 0, 3, 1, "'width' is not a property of the simulation" },
 
     // bare blocks (§3.2, D138)
     { "system s {\nwidgets { }\n}", NULL,            0, 2, 1,  "'widgets' is not a section of a system" },
@@ -384,10 +457,31 @@ static LoadErrorCase loadErrorCases[] =
     { "system s {\nc = TSDA;\n}", NULL,              0, 2, 1,  "must give at least one law property" },
     { "system s {\na = 1;\nc = TSDA, p1: a;\n}", NULL, 0, 3, 11, "'p1' is placement" },
     { "system s {\nc = nosuch { }\n}", NULL,         0, 2, 5,  "unknown type 'nosuch'" },
-    { "system s {\nTSDA: revolute, at: TSDA, axis: TSDA;\ny = TSDA, rate: 1;\n}", NULL, 0, 3, 5, "both a user name and a built-in type" },
+    { "system s {\nTSDA: revolute, at: TSDA, axis: TSDA;\ny = TSDA, rate: 1;\n}", NULL, 0, 3, 5, "'TSDA' is both a user name and a built-in type, so this '=' could copy the value or define a 'TSDA' (D199)" },
     { "system s {\na = b: 3;\n}", NULL,              0, 2, 5,  "the value, not a property" },
     { "system s {\nx = a, default: 0;\na = 1;\n}", NULL, 0, 2, 8, "not implemented yet: the properties of a value" },
-    { "system s {\nd = TSDA, rate: 1;\nk = d;\n}", NULL, 0, 3, 5, "not implemented yet: '=' headed by the definition 'd'" },
+
+    // refinement (D200)
+    { "system s {\nd = TSDA, rate: 1;\nk = d;\n}", NULL, 0, 3, 1, "a refinement must set at least one law property; this would only rename 'd' (D200)" },
+    { "system s {\nd = TSDA, rate: 1;\nk = d { }\n}", NULL, 0, 3, 1, "a refinement must set at least one law property" },
+    { "system s {\na = b, rate: 1;\nb = a, rate: 2;\n}", NULL, 0, 3, 5, "these definitions refine each other in a cycle: b -> a -> b (D200)" },
+    { "system s {\na = a, rate: 1;\n}", NULL,       0, 2, 5,  "refine each other in a cycle: a -> a" },
+    { "system s {\nx = a, rate: 1;\na = b { rate: 1; }\nb = a { rate: 2; }\n}", NULL, 0, 4, 5, "in a cycle: b -> a -> b" },
+    { "system s {\nc = TSDA, rate: 1;\nd = c, p1: 1;\n}", NULL, 0, 3, 8, "'p1' is placement; a definition holds law properties only" },
+    { "system s {\nc = TSDA, rate: 1;\nd = c, damping: 2;\nj: d, rate: 3;\n}", NULL, 0, 4, 7, "must not restate it" },
+    { "system s {\nc = TSDA, rate: 1;\nd = c, damping: 2;\na = 1;\nj: d, p1: a;\n}", NULL, 0, 5, 1, "'j' is missing the required property 'p2'" },
+    { "system s {\nv = 1;\nd = v, rate: 1;\n}", NULL, 0, 3, 8, "not implemented yet: the properties of a value" },
+    { "system s {\nc = TSDA, rate: 1;\nbodies { b { points { c = c, rate: 2; } } }\n}", NULL, 0, 3, 27, "refine each other in a cycle: c -> c" },
+
+    // a definition may not take a unit's name (D177)
+    { "system s {\nmm = TSDA, rate: 1;\n}", NULL,   0, 2, 1,  "'mm' is the name of a unit (§3.5), and a shared definition may not take one (D177)" },
+    { "system s {\nlb = TSDA, rate: 1;\n}", NULL,   0, 2, 1,  "'lb' is the name of a unit" },
+    { "system s {\nkN = TSDA { rate: 1; }\n}", NULL, 0, 2, 1, "'kN' is the name of a unit" },
+    { "system s {\nc = TSDA, rate: 1;\ndeg = c, rate: 2;\n}", NULL, 0, 3, 1, "'deg' is the name of a unit" },
+
+    // a connector is declared in the system, not in a body (D183)
+    { "system s {\nbodies { b { j: revolute, at: 1, axis: 1; } }\n}", NULL, 0, 2, 14, "'j' is a revolute, a connector; a connector is declared in the system, not in a body (D183)" },
+    { "system s {\nbodies { b { points { k: lock; } } }\n}", NULL, 0, 2, 23, "'k' is a lock, a connector" },
 
     // properties (§3.3, §4)
     { "system s {\na = 1;\nj: revolute, at: a, nosuch: a;\n}", NULL, 0, 3, 21, "'nosuch' is not a property of revolute" },
@@ -425,9 +519,35 @@ static LoadErrorCase loadErrorCases[] =
     { "gravity: g;\nsystem s { g = 1; }", NULL,      0, 1, 10, "unknown name 'g'" },
 
     // connector slots (§3.7)
-    { "system s {\nbodies { b { } }\nassembly { world <nosuch> b; }\n}", NULL, 0, 3, 19, "'nosuch' is not a declared connector" },
-    { "system s {\np = 1;\nbodies { b { } }\nassembly { world <p> b; }\n}", NULL, 0, 4, 19, "'p' is not a declared connector" },
-    { "system s {\nd = TSDA, rate: 1;\nbodies { b { } }\nassembly { world <d> b; }\n}", NULL, 0, 4, 19, "'d' is not a declared connector" },
+    { "system s {\nbodies { b { } }\nassembly { world <nosuch> b; }\n}", NULL, 0, 3, 19, "'nosuch' is neither a declared connector nor a built-in connector type (§3.7, D170)" },
+    { "system s {\np = 1;\nbodies { b { } }\nassembly { world <p> b; }\n}", NULL, 0, 4, 19, "'p' is a value; a slot holds a declared connector instance or a built-in connector type" },
+    { "system s {\nd = TSDA, rate: 1;\nbodies { b { } }\nassembly { world <d> b; }\n}", NULL, 0, 4, 19, "'d' is a definition; declare an instance of it and wire that (D175)" },
+    { "system s {\nlock: revolute, at: 1, axis: 1;\nbodies { b { } }\nassembly { world <lock> b; }\n}", NULL, 0, 4, 19, "'lock' is both a declared instance and a built-in connector type, so the slot can't tell which is meant (D175)" },
+
+    // a slot path goes through nested systems to a connector (D181)
+    { "system s {\nbodies { b { } }\nassembly { world <b.j> b; }\n}", NULL, 0, 3, 19, "'b' is a body, and no path reaches into a body; a connector is declared in the system (D181, D183)" },
+    { "system s {\np = 1;\nassembly { world <p.j> world; }\n}", NULL, 0, 3, 19, "'p' is a value, not a nested system; a slot path names a connector of a nested system" },
+    { "system s {\nassembly { world <q.j> world; }\n}", NULL, 0, 2, 19, "unknown name 'q'" },
+    { "system s {\nsystem t { }\nassembly { world <t.j> world; }\n}", NULL, 0, 3, 21, "the system 't' declares no connector 'j' (D181)" },
+    { "system s {\nsystem t { bodies { u { } } }\nassembly { world <t.u> world; }\n}", NULL, 0, 3, 21, "'u' is a body of the system 't', not a connector" },
+    { "system s {\nsystem t { d = TSDA, rate: 1; }\nassembly { world <t.d> world; }\n}", NULL, 0, 3, 21, "'d' is a definition; declare an instance of it and wire that (D175)" },
+    { "system s {\nsystem t { bodies { u { } } }\nassembly { world <t.u.j> world; }\n}", NULL, 0, 3, 21, "'u' is a body of the system 't'; a path goes on only through nested systems" },
+    { "system s {\nsystem t { }\nassembly { world <t.v.j> world; }\n}", NULL, 0, 3, 21, "the system 't' declares no 'v'" },
+    { "system a {\nsystem b { system c { j: lock; } }\nsystem d { assembly { world <b.c.j> world; } }\n}", NULL, 0, 3, 30, "unknown name 'b'" },
+
+    // an endpoint path goes through nested systems to a body (D182)
+    { "system s {\nsystem t { }\nassembly { world <lock> t.u; }\n}", NULL, 0, 3, 27, "the system 't' declares no 'u' (D182)" },
+    { "system s {\nsystem t { }\nassembly { world <lock> t; }\n}", NULL, 0, 3, 25, "'t' is a nested system, not a body; name one of its bodies by path, as in t.bUCA (D182)" },
+    { "system s {\nsystem t { system v { } }\nassembly { world <lock> t.v; }\n}", NULL, 0, 3, 27, "'v' is a nested system, not a body" },
+    { "system s {\nsystem t { j: lock; }\nt.j.dof.pos <- 1;\n}", NULL, 0, 3, 1, "the system 't' can't be read from outside it; only an assembly line may name its members, by path (D2, D182)" },
+
+    // every `use` must resolve (D202)
+    { "namespace a { use b; }", NULL,                0, 1, 15, "'b' is not loaded, so this 'use' can't be met (D202)" },
+    { "namespace a { use b.c; }", NULL,              0, 1, 15, "'b' is not loaded" },
+    { "namespace b { }\nnamespace a { use b.c; }", NULL, 0, 2, 15, "'b.c' is not loaded" },
+    { "namespace lib { system x { } }\nnamespace a { use lib.x; }", NULL, 0, 2, 15, "'lib.x' is not loaded: the system 'x' is private to the namespace 'lib', which does not provide it (D8, D202)" },
+    { "namespace a { use lib.x; }", "namespace lib { system x { } }", 0, 1, 15, "private to the namespace 'lib'" },
+    { "system s { }\nnamespace a { use s; }", NULL,  0, 2, 15, "'s' is not loaded" },
     { "system s {\nj: revolute, at: 1, axis: 1;\nassembly { nosuch <j> world; }\n}", NULL, 0, 3, 12, "unknown name 'nosuch'" },
 
     // `provides` (D8)

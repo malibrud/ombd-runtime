@@ -5,15 +5,17 @@
 //   1. tryMerge     unite namespaces, take `gravity` and `simulation`, find the root
 //   2. tryDeclare   walk the systems: flatten sections, enter every name in its scope
 //   3. tryClassify  with every name known, say what each `=` and `:` statement is
-//   4. tryResolve   look up every remaining name in the space its position selects
-//   5. tryRequire   check that every element sets its required properties (§4)
+//   4. tryResolve   look up every remaining name in the space its position selects,
+//                   then check every `use` (D202)
+//   5. tryRequire   check that every element sets its required properties (§4),
+//                   and that the model states `gravity` (D184)
 //
 // Declarations are order-independent (§0), which is why declaring comes first.
 //
 // Not implemented yet, each with its own error: comprehensions, typed open
-// signals and other unit bases, the properties of a value (`default:`), the
-// `simulation` layer, and the later segments of a path. Only a path's first
-// name is resolved.
+// signals and other unit bases, the properties of a value (`default:`), and
+// the later segments of a path. Only a path's first name is resolved, except
+// in an assembly line, where a path goes into nested systems (D181, D182).
 
 #include "resolve.h"
 #include <stdarg.h>
@@ -32,13 +34,22 @@ static const uint32_t SPACE_EXPRESSION = SPACE_USER | SYM_BIT( SYM_BUILTIN_VALUE
 
 static const uint32_t SPACE_HEAD     = SYM_BIT( SYM_BUILTIN_TYPE ) | SYM_BIT( SYM_DEFINITION );
 static const uint32_t SPACE_FUNCTION = SYM_BIT( SYM_BUILTIN_FUNCTION );
-static const uint32_t SPACE_SLOT     = SYM_BIT( SYM_INSTANCE );                // §3.7
+
+// How far a `name = …;` statement has got in pass 3. A refinement classifies
+// its base first (D200), so the order of the text doesn't matter.
+enum ClassifyState
+{
+    CLASSIFY_PENDING,
+    CLASSIFY_RUNNING,
+    CLASSIFY_DONE,
+};
 
 // The loader's state. It lives on tryLoadModel's stack.
 struct Loader
 {
     Model     *model;
     LoadError *error;
+    uint8_t   *classifyState;    // parallel to model->symbols during pass 3: a ClassifyState
 };
 
 // What a bare block means depends on where it stands (§2.3, §3.2).
@@ -48,6 +59,8 @@ enum BlockContext
     CONTEXT_SECTION,             // in a section: no bare blocks
     CONTEXT_BODIES,              // in `bodies`: a body
     CONTEXT_BODY,                // directly in a body: `points` or `frames`
+    CONTEXT_SIMULATION,          // directly in `simulation`: one of its sections (D36)
+    CONTEXT_OUTPUTS,             // in its `outputs`: `update:` and the paths to record (D82)
 };
 
 // How strictly an element's properties are checked (D152).
@@ -196,6 +209,8 @@ static uint32_t Model_addSymbol( Model *m, SymbolKind kind, const char *name, ui
     s->next     = 0;
     s->ownScope = 0;
     s->type     = NULL;
+    s->base     = 0;
+    s->provided = false;
 
     Scope *owner = &m->scopes[ scope ];
     if ( owner->lastSymbol == 0 ) owner->firstSymbol = index;
@@ -221,7 +236,8 @@ static uint32_t Model_findInScope( const Model *m, uint32_t scope, const char *n
 }
 
 // Look a name up from `scope` outward. A system is self-contained, so the
-// search goes from a system straight to the built-ins (D1, D2).
+// search goes from a system straight to the built-ins (D169). `simulation`'s
+// parent is the root system, so its search ends the same way (D176).
 static uint32_t Model_lookup( const Model *m, uint32_t scope, const char *name, uint32_t length, uint32_t space )
 {
     while ( scope != 0 )
@@ -264,6 +280,22 @@ static bool tryDeclareName( Loader *l, uint32_t unit, uint32_t token, uint32_t n
         }
         return Loader_failAt( l, unit, token, "'%.*s' is already declared in this scope, at %s:%u:%u (§3.2)",
                               (int)length, name, m->units[ e->unit ].source.path, first->line, first->col );
+    }
+
+    // `simulation` may not reuse a name of the root system's scope (D176).
+    if ( m->scopes[ scope ].kind == SCOPE_SIMULATION )
+    {
+        uint32_t root = Model_findInScope( m, m->scopes[ scope ].parent, name, length, SPACE_USER );
+        if ( root != 0 )
+        {
+            const Symbol *r     = &m->symbols[ root ];
+            const Symbol *owner = &m->symbols[ m->rootSystem ];
+            const Token  *first = &m->units[ r->unit ].tokens.data[ r->token ];
+            return Loader_failAt( l, unit, token, "'%.*s' is already declared in the root system '%.*s', at %s:%u:%u; "
+                                                  "'simulation' may not reuse its names (D176)",
+                                  (int)length, name, (int)owner->length, owner->name,
+                                  m->units[ r->unit ].source.path, first->line, first->col );
+        }
     }
 
     *symbol = Model_addSymbol( m, kind, name, length, unit, token, node, scope );
@@ -544,7 +576,23 @@ static bool tryDeclareBareBlock( Loader *l, uint32_t unit, uint32_t statement, u
         info->role = ROLE_SECTION;
         return tryDeclareBlock( l, unit, block, scope, CONTEXT_SECTION, seen );
 
+    case CONTEXT_SIMULATION:
+    {
+        if ( !Catalog_isSimulationSection( name, length ) )
+        {
+            return Loader_failAt( l, unit, token, "'%.*s' is not a section of 'simulation'; it may hold 'controls', 'signals', "
+                                                  "'drivers' and 'outputs' (§3.2, D36)", (int)length, name );
+        }
+        info->role = ROLE_SECTION;
+        bool isOutputs = length == 7 && memcmp( name, "outputs", 7 ) == 0;
+        if ( !isOutputs ) return tryDeclareBlock( l, unit, block, scope, CONTEXT_SECTION, seen );
+
+        SeenProperties outputsSeen = {};
+        return tryDeclareBlock( l, unit, block, scope, CONTEXT_OUTPUTS, &outputsSeen );
+    }
+
     case CONTEXT_SECTION:
+    case CONTEXT_OUTPUTS:
         break;
     }
     return Loader_failAt( l, unit, token, "a bare block '%.*s' is misplaced inside a section (§3.2, D138)", (int)length, name );
@@ -602,12 +650,41 @@ static bool tryDeclareDeclaration( Loader *l, uint32_t unit, uint32_t statement,
     return true;
 }
 
+// `simulation`'s `outputs { update: 10 ms; path; … }` declares nothing: it sets
+// its own `update:` and lists the paths to record (§4.11, D82).
+static bool tryDeclareOutputsStatement( Loader *l, uint32_t unit, uint32_t statement, SeenProperties *seen )
+{
+    NodeKind kind = Loader_kind( l, unit, statement );
+    if ( kind == NODE_REFERENCE ) return true;
+
+    uint32_t key = Loader_child( l, unit, statement );
+    if ( kind == NODE_DECLARATION && Loader_kind( l, unit, key ) == NODE_NAME )
+    {
+        uint32_t    token = Loader_node( l, unit, key )->token;
+        uint32_t    length;
+        const char *name  = Loader_text( l, unit, token, &length );
+        if ( ElementInfo_findProperty( &Catalog_outputs, name, length ) != NULL )
+        {
+            if ( !tryBindProperty( l, unit, statement, token, &Catalog_outputs, BIND_ANY, seen, NULL ) ) return false;
+            return tryCheckPropertyShape( l, unit, statement, Loader_info( l, unit, statement )->property );
+        }
+    }
+    return Loader_failAt( l, unit, Loader_at( l, unit, statement ), "an 'outputs' block holds 'update:' and the paths to record, "
+                                                                    "as in 'outputs { update: 10 ms; x; }' (§4.11)" );
+}
+
 // Enter the names of a block in `scope`. Sections are not scopes (D22), so
 // their contents land in the same scope, and `seen` runs across them.
 static bool tryDeclareBlock( Loader *l, uint32_t unit, uint32_t block, uint32_t scope, BlockContext context, SeenProperties *seen )
 {
     for ( uint32_t s = Loader_child( l, unit, block ) ; s != 0 ; s = Loader_next( l, unit, s ) )
     {
+        if ( context == CONTEXT_OUTPUTS )
+        {
+            if ( !tryDeclareOutputsStatement( l, unit, s, seen ) ) return false;
+            continue;
+        }
+
         bool declared = true;
         switch ( Loader_kind( l, unit, s ) )
         {
@@ -615,6 +692,10 @@ static bool tryDeclareBlock( Loader *l, uint32_t unit, uint32_t block, uint32_t 
             if ( context == CONTEXT_BODY )
             {
                 return Loader_failAt( l, unit, Loader_at( l, unit, s ), "a system may not be declared inside a body (D138)" );
+            }
+            if ( l->model->scopes[ scope ].kind == SCOPE_SIMULATION )
+            {
+                return Loader_failAt( l, unit, Loader_at( l, unit, s ), "a system may not be declared inside 'simulation' (§2.1, D138)" );
             }
             declared = tryDeclareSystemSymbol( l, unit, s, scope );
             break;
@@ -639,14 +720,30 @@ static bool tryDeclareBlock( Loader *l, uint32_t unit, uint32_t block, uint32_t 
     return true;
 }
 
+// `simulation { }` is a scope whose parent is the root system, wherever it is
+// written (D176). It is declared after every system, so that the root's names
+// are known when its own are checked against them.
+static bool tryDeclareSimulation( Loader *l )
+{
+    Model   *m     = l->model;
+    uint32_t unit  = m->simulationUnit;
+    uint32_t block = Loader_child( l, unit, m->simulationNode );
+    if ( m->rootSystem == 0 )
+    {
+        return Loader_failAt( l, unit, Loader_at( l, unit, m->simulationNode ),
+                              "a 'simulation' block needs a model, and the top level holds no system (D139, D176)" );
+    }
+
+    uint32_t rootScope = m->symbols[ m->rootSystem ].ownScope;
+    m->simulationScope = Model_addScope( m, SCOPE_SIMULATION, rootScope, 0, &Catalog_simulation );
+
+    SeenProperties seen = {};
+    return tryDeclareBlock( l, unit, block, m->simulationScope, CONTEXT_SIMULATION, &seen );
+}
+
 static bool tryDeclare( Loader *l )
 {
     Model *m = l->model;
-    if ( m->simulationNode != 0 )
-    {
-        return Loader_failAt( l, m->simulationUnit, Loader_at( l, m->simulationUnit, m->simulationNode ),
-                              "not implemented yet: a 'simulation' block" );
-    }
 
     // Declaring a system can add nested systems, which this loop then reaches.
     for ( uint32_t s = 1 ; s < m->symbolCount ; s++ )
@@ -661,6 +758,8 @@ static bool tryDeclare( Loader *l )
         SeenProperties seen = {};
         if ( !tryDeclareBlock( l, unit, block, scope, CONTEXT_SYSTEM, &seen ) ) return false;
     }
+
+    if ( m->simulationNode != 0 ) return tryDeclareSimulation( l );
     return true;
 }
 
@@ -727,10 +826,79 @@ static void Loader_markHead( Loader *l, uint32_t unit, uint32_t head, uint32_t s
     info->symbol = symbol;
 }
 
-// `name = …;`: a shared definition when its head is a built-in type, and
-// otherwise a value (§3.3).
+// The user name that the bare head of symbol `s`'s `=` statement names, or 0.
+static uint32_t Loader_headSymbol( const Loader *l, uint32_t s )
+{
+    const Model *m     = l->model;
+    uint32_t     unit  = m->symbols[ s ].unit;
+    uint32_t     key   = Loader_child( l, unit, m->symbols[ s ].node );
+    uint32_t     head  = Loader_headName( l, unit, Loader_next( l, unit, key ) );
+    if ( head == 0 ) return 0;
+
+    uint32_t    length;
+    const char *name = Loader_text( l, unit, Loader_node( l, unit, head )->token, &length );
+    return Model_lookup( m, m->symbols[ s ].scope, name, length, SPACE_USER );
+}
+
+// Write the chain of refinements from `start` back round to it: "a -> b -> a".
+static void Loader_formatCycle( const Loader *l, uint32_t start, char *out, uint32_t size )
+{
+    const Model *m    = l->model;
+    uint32_t     used = 0;
+    uint32_t     at   = start;
+    out[0] = '\0';
+    for ( uint32_t step = 0 ; step <= m->symbolCount && at != 0 ; step++ )
+    {
+        const Symbol *s = &m->symbols[ at ];
+        int n = snprintf( out + used, size - used, "%s%.*s", step > 0 ? " -> " : "", (int)s->length, s->name );
+        if ( n < 0 || used + (uint32_t)n >= size ) return;
+        used += (uint32_t)n;
+        if ( step > 0 && at == start ) return;
+        at = Loader_headSymbol( l, at );
+    }
+}
+
+static bool tryClassifyEquals( Loader *l, uint32_t s );
+
+// The head of `name = head, …;` is no built-in type: it may be a user
+// definition, which this refines (D200). Classify that name first, whatever
+// the order of the text. Sets `base` to the definition, or 0.
+static bool tryFindBase( Loader *l, uint32_t s, uint32_t head, bool refines, uint32_t *base )
+{
+    Model      *m    = l->model;
+    uint32_t    unit = m->symbols[ s ].unit;
+    uint32_t    length;
+    const char *name = Loader_text( l, unit, Loader_node( l, unit, head )->token, &length );
+    uint32_t    user = Model_lookup( m, m->symbols[ s ].scope, name, length, SPACE_USER );
+
+    *base = 0;
+    if ( user == 0 ) return true;
+    if ( m->symbols[ user ].kind == SYM_VALUE )
+    {
+        if ( l->classifyState[ user ] == CLASSIFY_RUNNING )
+        {
+            // Every name in the loop has a user name as its head, so none
+            // reaches a type. Values that only name each other are left to
+            // the type check, which reports a value defined in terms of itself.
+            if ( !refines ) return true;
+
+            char cycle[200];
+            Loader_formatCycle( l, s, cycle, sizeof( cycle ) );
+            return Loader_failAt( l, unit, Loader_at( l, unit, head ), "these definitions refine each other in a cycle: %s (D200)", cycle );
+        }
+        if ( !tryClassifyEquals( l, user ) ) return false;
+    }
+    if ( m->symbols[ user ].kind == SYM_DEFINITION ) *base = user;
+    return true;
+}
+
+// `name = …;`: a shared definition when its head is a built-in type or a user
+// definition (D200), and otherwise a value (§3.3).
 static bool tryClassifyEquals( Loader *l, uint32_t s )
 {
+    if ( l->classifyState[ s ] == CLASSIFY_DONE ) return true;
+    l->classifyState[ s ] = CLASSIFY_RUNNING;
+
     Model      *m         = l->model;
     uint32_t    unit      = m->symbols[ s ].unit;
     uint32_t    statement = m->symbols[ s ].node;
@@ -739,8 +907,10 @@ static bool tryClassifyEquals( Loader *l, uint32_t s )
     uint32_t    value     = Loader_next( l, unit, key );
     uint32_t    head      = Loader_headName( l, unit, value );
     bool        isBlock   = Loader_kind( l, unit, value ) == NODE_TYPED_BLOCK;
+    bool        refines   = isBlock || ( head != 0 && Loader_next( l, unit, head ) != 0 );   // a head, then properties
 
     uint32_t type = 0;
+    uint32_t base = 0;
     if ( head != 0 )
     {
         uint32_t    length;
@@ -753,18 +923,24 @@ static bool tryClassifyEquals( Loader *l, uint32_t s )
             if ( user != 0 && user != s )
             {
                 return Loader_failAt( l, unit, Loader_at( l, unit, head ), "'%.*s' is both a user name and a built-in type, "
-                                      "and the specification does not say which this '=' means", (int)length, name );
+                                      "so this '=' could copy the value or define a '%.*s' (D199)",
+                                      (int)length, name, (int)length, name );
             }
         }
-        else if ( isBlock )
+        else
         {
-            return Loader_failAt( l, unit, Loader_at( l, unit, head ), "unknown type '%.*s' (§4)", (int)length, name );
+            if ( !tryFindBase( l, s, head, refines, &base ) ) return false;
+            if ( base == 0 && isBlock )
+            {
+                return Loader_failAt( l, unit, Loader_at( l, unit, head ), "unknown type '%.*s' (§4)", (int)length, name );
+            }
         }
     }
 
     NodeInfo *info = Loader_info( l, unit, statement );
-    if ( type == 0 )
+    if ( type == 0 && base == 0 )
     {
+        l->classifyState[ s ] = CLASSIFY_DONE;
         info->role = ROLE_VALUE;
 
         uint32_t first = Loader_child( l, unit, value );
@@ -780,12 +956,14 @@ static bool tryClassifyEquals( Loader *l, uint32_t s )
         return true;
     }
 
-    // A shared definition.
-    const ElementInfo *element = m->symbols[ type ].type;
+    // A shared definition, or a refinement of one, which has its base's type (D200).
+    const ElementInfo *element = base != 0 ? m->symbols[ base ].type : m->symbols[ type ].type;
     info->role = ROLE_DEFINITION;
     m->symbols[ s ].kind = SYM_DEFINITION;
     m->symbols[ s ].type = element;
-    Loader_markHead( l, unit, head, type );
+    m->symbols[ s ].base = base;
+    l->classifyState[ s ] = CLASSIFY_DONE;
+    Loader_markHead( l, unit, head, base != 0 ? base : type );
 
     uint32_t    length;
     const char *own = Loader_text( l, unit, Loader_node( l, unit, key )->token, &length );
@@ -793,6 +971,11 @@ static bool tryClassifyEquals( Loader *l, uint32_t s )
     {
         return Loader_failAt( l, unit, Loader_at( l, unit, key ), "'%.*s' is a built-in type; "
                                                                   "a shared definition may not reuse its name (D144)", (int)length, own );
+    }
+    if ( Units_isUnitName( own, length ) )
+    {
+        return Loader_failAt( l, unit, Loader_at( l, unit, key ), "'%.*s' is the name of a unit (§3.5), "
+                                                                  "and a shared definition may not take one (D177)", (int)length, own );
     }
     if ( !ElementInfo_hasLaw( element ) )
     {
@@ -802,6 +985,12 @@ static bool tryClassifyEquals( Loader *l, uint32_t s )
 
     uint32_t lawCount = 0;
     if ( !tryBindValue( l, unit, value, element, BIND_DEFINITION, &lawCount ) ) return false;
+    if ( lawCount == 0 && base != 0 )
+    {
+        const Symbol *b = &m->symbols[ base ];
+        return Loader_failAt( l, unit, Loader_at( l, unit, key ), "a refinement must set at least one law property; "
+                                                                  "this would only rename '%.*s' (D200)", (int)b->length, b->name );
+    }
     if ( lawCount == 0 )
     {
         return Loader_failAt( l, unit, Loader_at( l, unit, key ), "a shared definition must give at least one law property (D152)" );
@@ -864,6 +1053,14 @@ static bool tryClassifyColon( Loader *l, uint32_t s )
     const ElementInfo *element = m->symbols[ type ].type;
     BindMode           mode    = m->symbols[ type ].kind == SYM_DEFINITION ? BIND_OF_DEFINITION : BIND_ANY;
 
+    // A connector joins two bodies, so it belongs to the system (D183).
+    if ( m->scopes[ scope ].kind == SCOPE_BODY && element->endpointCount > 0 )
+    {
+        return Loader_failAt( l, unit, Loader_at( l, unit, key ), "'%.*s' is a %s, a connector; "
+                                                                  "a connector is declared in the system, not in a body (D183)",
+                              (int)keyLength, keyText, element->name );
+    }
+
     m->symbols[ s ].type = element;
     Loader_info( l, unit, statement )->role = ROLE_INSTANCE;
     Loader_markHead( l, unit, head, type );
@@ -871,44 +1068,31 @@ static bool tryClassifyColon( Loader *l, uint32_t s )
     return tryBindValue( l, unit, value, element, mode, NULL );
 }
 
-// A value's head may name a user definition: `x = coil, …;`. Whether that is
-// legal is an open question (§3.2 allows it, D152 keeps aliases out).
-static bool tryRejectDefinitionHead( Loader *l, uint32_t s )
-{
-    Model   *m         = l->model;
-    uint32_t unit      = m->symbols[ s ].unit;
-    uint32_t statement = m->symbols[ s ].node;
-    uint32_t key       = Loader_child( l, unit, statement );
-    uint32_t value     = Loader_next( l, unit, key );
-    uint32_t head      = Loader_headName( l, unit, value );
-    if ( head == 0 ) return true;
-
-    uint32_t    length;
-    const char *name = Loader_text( l, unit, Loader_node( l, unit, head )->token, &length );
-    if ( Model_lookup( m, m->symbols[ s ].scope, name, length, SYM_BIT( SYM_DEFINITION ) ) != 0 )
-    {
-        return Loader_failAt( l, unit, Loader_at( l, unit, head ), "not implemented yet: '=' headed by the definition '%.*s'",
-                              (int)length, name );
-    }
-    return true;
-}
-
 static bool tryClassify( Loader *l )
 {
     Model *m = l->model;
+    l->classifyState = (uint8_t *)calloc( m->symbolCount, sizeof( uint8_t ) );
+    if ( l->classifyState == NULL )
+    {
+        fprintf( stderr, "ombdc: out of memory\n" );
+        exit( 1 );
+    }
 
     // Every `=` first, so that every definition is known when the heads of
     // `:` statements are looked up, whatever the order in the text.
-    for ( uint32_t s = 1 ; s < m->symbolCount ; s++ )
+    bool ok = true;
+    for ( uint32_t s = 1 ; ok && s < m->symbolCount ; s++ )
     {
-        if ( m->symbols[ s ].kind == SYM_VALUE && !tryClassifyEquals( l, s ) ) return false;
+        if ( m->symbols[ s ].kind == SYM_VALUE ) ok = tryClassifyEquals( l, s );
     }
-    for ( uint32_t s = 1 ; s < m->symbolCount ; s++ )
+    for ( uint32_t s = 1 ; ok && s < m->symbolCount ; s++ )
     {
-        if ( m->symbols[ s ].kind == SYM_VALUE && !tryRejectDefinitionHead( l, s ) ) return false;
-        if ( m->symbols[ s ].kind == SYM_INSTANCE && !tryClassifyColon( l, s ) ) return false;
+        if ( m->symbols[ s ].kind == SYM_INSTANCE ) ok = tryClassifyColon( l, s );
     }
-    return true;
+
+    free( l->classifyState );
+    l->classifyState = NULL;
+    return ok;
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -929,7 +1113,8 @@ static bool tryResolveName( Loader *l, uint32_t unit, uint32_t node, uint32_t sc
     if ( symbol == 0 ) return Loader_failAt( l, unit, token, "unknown name '%.*s' (§3.2)", (int)length, name );
     if ( m->symbols[ symbol ].kind == SYM_SYSTEM )
     {
-        return Loader_failAt( l, unit, token, "the system '%.*s' can't be read from outside it (D2)", (int)length, name );
+        return Loader_failAt( l, unit, token, "the system '%.*s' can't be read from outside it; only an assembly line "
+                                              "may name its members, by path (D2, D182)", (int)length, name );
     }
 
     NodeInfo *info = Loader_info( l, unit, node );
@@ -1021,10 +1206,255 @@ static bool tryResolveElementValue( Loader *l, uint32_t unit, uint32_t value, ui
     return true;
 }
 
+// What a symbol is, for a message about a slot or a path: "a value", "a body".
+static const char *SymbolKind_describe( SymbolKind kind )
+{
+    switch ( kind )
+    {
+    case SYM_VALUE:         return "a value";
+    case SYM_DEFINITION:    return "a definition";
+    case SYM_INSTANCE:      return "an instance";
+    case SYM_BODY:          return "a body";
+    case SYM_SYSTEM:        return "a system";
+    case SYM_BUILTIN_VALUE: return "a built-in value";
+    default:                return "a name";
+    }
+}
+
+// A path into nested systems, `a.b.x` (D181, D182). Every segment but the last
+// must name a system, the first by lookup from `scope` and each later one
+// among the names its system declares. Each system segment is marked as a
+// reference. Sets `holder` to the scope of the last system, and `last` to the
+// last segment's NAME node. When the first segment is not a system, sets
+// `isSystemPath` to false and reports nothing: the caller decides what that
+// path means. Returns false only on an error inside a system path.
+static bool tryWalkSystemPath( Loader *l, uint32_t unit, uint32_t path, uint32_t scope, uint32_t *holder, uint32_t *last, bool *isSystemPath )
+{
+    Model   *m    = l->model;
+    uint32_t base = Loader_child( l, unit, path );
+    uint32_t name = Loader_next( l, unit, base );
+    *isSystemPath = false;
+
+    uint32_t outer = 0;
+    if ( Loader_kind( l, unit, base ) == NODE_ACCESS )
+    {
+        uint32_t inner = 0;
+        if ( !tryWalkSystemPath( l, unit, base, scope, &outer, &inner, isSystemPath ) ) return false;
+        if ( !*isSystemPath ) return true;
+
+        // The segment before this one must itself be a system of `outer`.
+        uint32_t    token = Loader_node( l, unit, inner )->token;
+        uint32_t    length;
+        const char *text  = Loader_text( l, unit, token, &length );
+        uint32_t    found = Model_findInScope( m, outer, text, length, SPACE_USER );
+        const Symbol *owner = &m->symbols[ m->scopes[ outer ].owner ];
+        if ( found == 0 )
+        {
+            return Loader_failAt( l, unit, token, "the system '%.*s' declares no '%.*s' (D181, D182)",
+                                  (int)owner->length, owner->name, (int)length, text );
+        }
+        if ( m->symbols[ found ].kind != SYM_SYSTEM )
+        {
+            return Loader_failAt( l, unit, token, "'%.*s' is %s of the system '%.*s'; a path goes on only through nested systems, "
+                                                  "and ports are not implemented yet (D181, D182)", (int)length, text,
+                                  SymbolKind_describe( m->symbols[ found ].kind ), (int)owner->length, owner->name );
+        }
+        NodeInfo *info = Loader_info( l, unit, inner );
+        info->role   = ROLE_REFERENCE;
+        info->symbol = found;
+        *holder = m->symbols[ found ].ownScope;
+        *last   = name;
+        return true;
+    }
+
+    if ( Loader_kind( l, unit, base ) != NODE_NAME ) return true;
+    uint32_t    token  = Loader_node( l, unit, base )->token;
+    uint32_t    length;
+    const char *text   = Loader_text( l, unit, token, &length );
+    uint32_t    symbol = Model_lookup( m, scope, text, length, SPACE_USER );
+    if ( symbol == 0 || m->symbols[ symbol ].kind != SYM_SYSTEM ) return true;
+
+    NodeInfo *info = Loader_info( l, unit, base );
+    info->role   = ROLE_REFERENCE;
+    info->symbol = symbol;
+    *holder       = m->symbols[ symbol ].ownScope;
+    *last         = name;
+    *isSystemPath = true;
+    return true;
+}
+
+// The connector a slot path names: one declared in a nested system (D181).
+static bool tryResolveSlotPath( Loader *l, uint32_t unit, uint32_t path, uint32_t scope, uint32_t *symbol )
+{
+    Model   *m      = l->model;
+    uint32_t holder = 0;
+    uint32_t last   = 0;
+    bool     isPath = false;
+    if ( !tryWalkSystemPath( l, unit, path, scope, &holder, &last, &isPath ) ) return false;
+
+    uint32_t first = path;
+    while ( Loader_kind( l, unit, first ) == NODE_ACCESS ) first = Loader_child( l, unit, first );
+    if ( !isPath )
+    {
+        uint32_t    token = Loader_at( l, unit, first );
+        uint32_t    length;
+        const char *text  = Loader_text( l, unit, token, &length );
+        uint32_t    found = Model_lookup( m, scope, text, length, SPACE_USER );
+        if ( found == 0 ) return Loader_failAt( l, unit, token, "unknown name '%.*s' (§3.2)", (int)length, text );
+        if ( m->symbols[ found ].kind == SYM_BODY )
+        {
+            return Loader_failAt( l, unit, token, "'%.*s' is a body, and no path reaches into a body; "
+                                                  "a connector is declared in the system (D181, D183)", (int)length, text );
+        }
+        return Loader_failAt( l, unit, token, "'%.*s' is %s, not a nested system; a slot path names a connector "
+                                              "of a nested system, as in <corner.jUBJ> (D181)",
+                              (int)length, text, SymbolKind_describe( m->symbols[ found ].kind ) );
+    }
+
+    uint32_t      token = Loader_node( l, unit, last )->token;
+    uint32_t      length;
+    const char   *text  = Loader_text( l, unit, token, &length );
+    uint32_t      found = Model_findInScope( m, holder, text, length, SPACE_USER );
+    const Symbol *owner = &m->symbols[ m->scopes[ holder ].owner ];
+    if ( found == 0 )
+    {
+        return Loader_failAt( l, unit, token, "the system '%.*s' declares no connector '%.*s' (D181)",
+                              (int)owner->length, owner->name, (int)length, text );
+    }
+    if ( m->symbols[ found ].kind == SYM_DEFINITION )
+    {
+        return Loader_failAt( l, unit, token, "'%.*s' is a definition; declare an instance of it and wire that (D175)", (int)length, text );
+    }
+    if ( m->symbols[ found ].kind != SYM_INSTANCE )
+    {
+        return Loader_failAt( l, unit, token, "'%.*s' is %s of the system '%.*s', not a connector (§3.7, D181)", (int)length, text,
+                              SymbolKind_describe( m->symbols[ found ].kind ), (int)owner->length, owner->name );
+    }
+    *symbol = found;
+    return true;
+}
+
+// What a connector slot names (§3.7, D170, D175, D181): a connector instance
+// declared in this system, a path to one in a nested system, or a built-in
+// connector type written directly, which is a fresh instance at each use.
+static bool tryResolveSlot( Loader *l, uint32_t unit, uint32_t slot, uint32_t scope )
+{
+    Model   *m         = l->model;
+    uint32_t connector = Loader_child( l, unit, slot );
+    uint32_t symbol    = 0;
+
+    switch ( Loader_kind( l, unit, connector ) )
+    {
+    case NODE_ACCESS:
+        if ( !tryResolveSlotPath( l, unit, connector, scope, &symbol ) ) return false;
+        break;
+
+    case NODE_NAME:
+    {
+        uint32_t    token   = Loader_node( l, unit, connector )->token;
+        uint32_t    length;
+        const char *name    = Loader_text( l, unit, token, &length );
+        uint32_t    user    = Model_lookup( m, scope, name, length, SPACE_USER );
+        uint32_t    builtin = Model_findInScope( m, SCOPE_INDEX_BUILTIN, name, length, SYM_BIT( SYM_BUILTIN_TYPE ) );
+        if ( builtin != 0 && m->symbols[ builtin ].type->endpointCount == 0 ) builtin = 0;
+
+        if ( user != 0 && builtin != 0 )
+        {
+            return Loader_failAt( l, unit, token, "'%.*s' is both a declared %s and a built-in connector type, "
+                                                  "so the slot can't tell which is meant (D175)", (int)length, name,
+                                  m->symbols[ user ].kind == SYM_INSTANCE ? "instance" : "name" );
+        }
+        if ( user != 0 )
+        {
+            SymbolKind kind = m->symbols[ user ].kind;
+            if ( kind == SYM_DEFINITION )
+            {
+                return Loader_failAt( l, unit, token, "'%.*s' is a definition; declare an instance of it and wire that (D175)",
+                                      (int)length, name );
+            }
+            if ( kind != SYM_INSTANCE )
+            {
+                return Loader_failAt( l, unit, token, "'%.*s' is %s; a slot holds a declared connector instance "
+                                                      "or a built-in connector type (§3.7, D170)",
+                                      (int)length, name, SymbolKind_describe( kind ) );
+            }
+            symbol = user;
+        }
+        else if ( builtin != 0 )
+        {
+            symbol = builtin;
+        }
+        else
+        {
+            return Loader_failAt( l, unit, token, "'%.*s' is neither a declared connector nor a built-in connector type (§3.7, D170)",
+                                  (int)length, name );
+        }
+        break;
+    }
+
+    default:
+        return Loader_failAt( l, unit, Loader_at( l, unit, connector ), "not implemented yet: an indexed connector" );
+    }
+
+    NodeInfo *info = Loader_info( l, unit, connector );
+    info->role   = ROLE_CONNECTOR;
+    info->symbol = symbol;
+    return true;
+}
+
+// An endpoint is a body, `world` or a port in scope, or a path to a body of a
+// nested system (D182). A path through nested systems is marked on its
+// ACCESS node, with what it reaches; any other path resolves its first name
+// only, and the assembly stage reports it as a port.
+static bool tryResolveEndpoint( Loader *l, uint32_t unit, uint32_t endpoint, uint32_t scope )
+{
+    Model *m = l->model;
+    if ( Loader_kind( l, unit, endpoint ) == NODE_NAME )
+    {
+        uint32_t    token  = Loader_node( l, unit, endpoint )->token;
+        uint32_t    length;
+        const char *name   = Loader_text( l, unit, token, &length );
+        uint32_t    symbol = Model_lookup( m, scope, name, length, SPACE_EXPRESSION );
+        if ( symbol != 0 && m->symbols[ symbol ].kind == SYM_SYSTEM )
+        {
+            return Loader_failAt( l, unit, token, "'%.*s' is a nested system, not a body; name one of its bodies by path, "
+                                                  "as in %.*s.bUCA (D182)", (int)length, name, (int)length, name );
+        }
+        return tryResolveName( l, unit, endpoint, scope );
+    }
+    if ( Loader_kind( l, unit, endpoint ) != NODE_ACCESS ) return tryResolveExpression( l, unit, endpoint, scope );
+
+    uint32_t holder = 0;
+    uint32_t last   = 0;
+    bool     isPath = false;
+    if ( !tryWalkSystemPath( l, unit, endpoint, scope, &holder, &last, &isPath ) ) return false;
+    if ( !isPath ) return tryResolveExpression( l, unit, endpoint, scope );
+
+    uint32_t      token = Loader_node( l, unit, last )->token;
+    uint32_t      length;
+    const char   *text  = Loader_text( l, unit, token, &length );
+    uint32_t      found = Model_findInScope( m, holder, text, length, SPACE_USER );
+    const Symbol *owner = &m->symbols[ m->scopes[ holder ].owner ];
+    if ( found == 0 )
+    {
+        return Loader_failAt( l, unit, token, "the system '%.*s' declares no '%.*s' (D182)",
+                              (int)owner->length, owner->name, (int)length, text );
+    }
+    if ( m->symbols[ found ].kind == SYM_SYSTEM )
+    {
+        return Loader_failAt( l, unit, token, "'%.*s' is a nested system, not a body; name one of its bodies by path (D182)",
+                              (int)length, text );
+    }
+
+    NodeInfo *info = Loader_info( l, unit, endpoint );
+    info->role   = ROLE_REFERENCE;
+    info->symbol = found;
+    return true;
+}
+
 // assembly: endpoint <connector> endpoint …
 static bool tryResolveChain( Loader *l, uint32_t unit, uint32_t chain, uint32_t scope )
 {
-    Model   *m    = l->model;
     uint32_t last = Loader_lastChild( l, unit, chain );
     if ( Loader_kind( l, unit, last ) == NODE_FOR )
     {
@@ -1033,35 +1463,9 @@ static bool tryResolveChain( Loader *l, uint32_t unit, uint32_t chain, uint32_t 
 
     for ( uint32_t c = Loader_child( l, unit, chain ) ; c != 0 ; c = Loader_next( l, unit, c ) )
     {
-        if ( Loader_kind( l, unit, c ) != NODE_SLOT )
-        {
-            if ( !tryResolveExpression( l, unit, c, scope ) ) return false;
-            continue;
-        }
-
-        uint32_t connector = Loader_child( l, unit, c );
-        if ( Loader_kind( l, unit, connector ) == NODE_ACCESS )
-        {
-            return Loader_failAt( l, unit, Loader_at( l, unit, connector ),
-                                  "not implemented yet: a connector in a nested system, by path (D181)" );
-        }
-        if ( Loader_kind( l, unit, connector ) != NODE_NAME )
-        {
-            return Loader_failAt( l, unit, Loader_at( l, unit, connector ), "not implemented yet: an indexed connector" );
-        }
-        uint32_t    token = Loader_node( l, unit, connector )->token;
-        uint32_t    length;
-        const char *name  = Loader_text( l, unit, token, &length );
-        uint32_t    symbol = Model_lookup( m, scope, name, length, SPACE_SLOT );
-        if ( symbol == 0 )
-        {
-            return Loader_failAt( l, unit, token, "'%.*s' is not a declared connector (§3.7; "
-                                                  "built-in connector types are not implemented yet)", (int)length, name );
-        }
-
-        NodeInfo *info = Loader_info( l, unit, connector );
-        info->role   = ROLE_CONNECTOR;
-        info->symbol = symbol;
+        bool resolved = Loader_kind( l, unit, c ) == NODE_SLOT ? tryResolveSlot( l, unit, c, scope )
+                                                                : tryResolveEndpoint( l, unit, c, scope );
+        if ( !resolved ) return false;
     }
     return true;
 }
@@ -1079,10 +1483,102 @@ static bool tryResolveProvides( Loader *l, uint32_t unit, uint32_t statement, ui
         {
             return Loader_failAt( l, unit, token, "this namespace has no system named '%.*s' to provide (D8)", (int)length, name );
         }
+        l->model->symbols[ symbol ].provided = true;
 
         NodeInfo *info = Loader_info( l, unit, c );
         info->role   = ROLE_PUBLISHED;
         info->symbol = symbol;
+    }
+    return true;
+}
+
+// `use a.b.c;` must name a loaded namespace, or a system that a loaded
+// namespace provides (D202). Its path is read from the top level: a
+// dependency is by identity (D4–D6). Sets `scope` to the namespace the path's
+// prefix reaches, and `last` to its last NAME node.
+static bool tryWalkUsePath( Loader *l, uint32_t unit, uint32_t path, uint32_t use, uint32_t *scope, uint32_t *last )
+{
+    if ( Loader_kind( l, unit, path ) != NODE_ACCESS )
+    {
+        *scope = SCOPE_INDEX_TOP;
+        *last  = path;
+        return true;
+    }
+
+    uint32_t outer = 0;
+    uint32_t inner = 0;
+    if ( !tryWalkUsePath( l, unit, Loader_child( l, unit, path ), use, &outer, &inner ) ) return false;
+
+    uint32_t    length;
+    const char *text  = Loader_text( l, unit, Loader_node( l, unit, inner )->token, &length );
+    uint32_t    found = Model_findInScope( l->model, outer, text, length, SYM_BIT( SYM_NAMESPACE ) );
+    if ( found == 0 )
+    {
+        const Node *p = Loader_node( l, unit, path );
+        const Unit *u = &l->model->units[ unit ];
+        const Token *a = &u->tokens.data[ p->firstToken ];
+        const Token *b = &u->tokens.data[ Loader_node( l, unit, inner )->token ];
+        return Loader_failAt( l, unit, Loader_at( l, unit, use ), "'%.*s' is not loaded, so this 'use' can't be met (D202)",
+                              (int)( b->offset + b->len - a->offset ), u->source.text + a->offset );
+    }
+    *scope = l->model->symbols[ found ].ownScope;
+    *last  = Loader_next( l, unit, Loader_child( l, unit, path ) );
+    return true;
+}
+
+static bool tryResolveUse( Loader *l, uint32_t unit, uint32_t use )
+{
+    Model      *m     = l->model;
+    uint32_t    path  = Loader_child( l, unit, use );
+    const Node *p     = Loader_node( l, unit, path );
+    const Unit *u     = &m->units[ unit ];
+    const Token *a    = &u->tokens.data[ p->firstToken ];
+    const Token *b    = &u->tokens.data[ p->lastToken ];
+    int          span = (int)( b->offset + b->len - a->offset );
+    const char  *text = u->source.text + a->offset;
+
+    uint32_t scope = 0;
+    uint32_t last  = 0;
+    if ( !tryWalkUsePath( l, unit, path, use, &scope, &last ) ) return false;
+
+    uint32_t    length;
+    const char *name  = Loader_text( l, unit, Loader_node( l, unit, last )->token, &length );
+    uint32_t    found = Model_findInScope( m, scope, name, length, SYM_BIT( SYM_NAMESPACE ) | SYM_BIT( SYM_SYSTEM ) );
+    if ( found != 0 && m->symbols[ found ].kind == SYM_SYSTEM && !m->symbols[ found ].provided )
+    {
+        if ( scope == SCOPE_INDEX_TOP ) found = 0;               // the top level provides nothing (D13)
+        else
+        {
+            const Symbol *owner = &m->symbols[ m->scopes[ scope ].owner ];
+            return Loader_failAt( l, unit, Loader_at( l, unit, use ), "'%.*s' is not loaded: the system '%.*s' is private to the "
+                                                                      "namespace '%.*s', which does not provide it (D8, D202)",
+                                  span, text, (int)length, name, (int)owner->length, owner->name );
+        }
+    }
+    if ( found == 0 )
+    {
+        return Loader_failAt( l, unit, Loader_at( l, unit, use ), "'%.*s' is not loaded, so this 'use' can't be met (D202)", span, text );
+    }
+
+    NodeInfo *info = Loader_info( l, unit, path );
+    info->role   = ROLE_DEPENDENCY;
+    info->symbol = found;
+    return true;
+}
+
+// Every `use`, after every `provides` is known, in every text (§3.1).
+static bool tryResolveUses( Loader *l, uint32_t unit, uint32_t block )
+{
+    for ( uint32_t s = Loader_child( l, unit, block ) ; s != 0 ; s = Loader_next( l, unit, s ) )
+    {
+        NodeKind kind = Loader_kind( l, unit, s );
+        if ( kind == NODE_USE && !tryResolveUse( l, unit, s ) ) return false;
+        if ( kind == NODE_NAMESPACE )
+        {
+            uint32_t first = Loader_child( l, unit, s );
+            uint32_t inner = Loader_kind( l, unit, first ) == NODE_BLOCK ? first : Loader_next( l, unit, first );
+            if ( !tryResolveUses( l, unit, inner ) ) return false;
+        }
     }
     return true;
 }
@@ -1104,6 +1600,9 @@ static bool tryResolveStatement( Loader *l, uint32_t unit, uint32_t statement, u
 
     case NODE_SYSTEM:
         return tryResolveBlock( l, unit, second, l->model->symbols[ info->symbol ].ownScope );
+
+    case NODE_SIMULATION:
+        return tryResolveBlock( l, unit, first, l->model->simulationScope );
 
     case NODE_SCOPE:
     {
@@ -1140,7 +1639,7 @@ static bool tryResolveStatement( Loader *l, uint32_t unit, uint32_t statement, u
         return tryResolveChain( l, unit, statement, scope );
 
     default:
-        return true;                                             // `use` has no effect yet
+        return true;                                             // `use` is checked once every `provides` is known
     }
 }
 
@@ -1158,6 +1657,10 @@ static bool tryResolve( Loader *l )
     for ( uint32_t unit = 0 ; unit < l->model->unitCount ; unit++ )
     {
         if ( !tryResolveBlock( l, unit, 0, SCOPE_INDEX_TOP ) ) return false;
+    }
+    for ( uint32_t unit = 0 ; unit < l->model->unitCount ; unit++ )
+    {
+        if ( !tryResolveUses( l, unit, 0 ) ) return false;
     }
     return true;
 }
@@ -1255,9 +1758,18 @@ static bool tryRequire( Loader *l )
             break;
 
         case SYM_DEFINITION:
-            Loader_markValue( l, unit, rest, m->symbols[ s ].type, &set );
+        {
+            // A refinement has whatever its bases set (D200).
+            uint32_t steps = 0;
+            for ( uint32_t d = s ; d != 0 && steps <= m->symbolCount ; d = m->symbols[ d ].base, steps++ )
+            {
+                uint32_t dUnit = m->symbols[ d ].unit;
+                uint32_t dRest = Loader_next( l, dUnit, Loader_child( l, dUnit, m->symbols[ d ].node ) );
+                Loader_markValue( l, dUnit, dRest, m->symbols[ s ].type, &set );
+            }
             if ( !tryCheckRequired( l, s, m->symbols[ s ].type, BIND_DEFINITION, &set ) ) return false;
             break;
+        }
 
         default:                                                 // an instance
         {
@@ -1269,6 +1781,15 @@ static bool tryRequire( Loader *l )
             break;
         }
         }
+    }
+
+    // A model states its gravity, even with no bodies (D184). A library text,
+    // with no root system, is not a model.
+    if ( m->rootSystem != 0 && m->gravityNode == 0 )
+    {
+        const Symbol *root = &m->symbols[ m->rootSystem ];
+        return Loader_failAt( l, root->unit, root->token, "the model states no 'gravity:'; state it once at the top level, "
+                                                          "as in 'gravity: [0, 0, -9.81] m/s2;' (D184)" );
     }
     return true;
 }
@@ -1299,6 +1820,7 @@ static void Model_init( Model *m, Unit *units, uint32_t unitCount )
     m->gravityNode    = 0;
     m->simulationUnit = 0;
     m->simulationNode = 0;
+    m->simulationScope = 0;
     m->links          = NULL;
     m->linkCount      = 0;
 
@@ -1339,8 +1861,9 @@ bool tryLoadModel( Unit *units, uint32_t unitCount, Model *model, LoadError *err
     Model_init( model, units, unitCount );
 
     Loader loader;
-    loader.model = model;
-    loader.error = error;
+    loader.model         = model;
+    loader.error         = error;
+    loader.classifyState = NULL;
 
     if ( !tryMerge( &loader ) || !tryDeclare( &loader ) || !tryClassify( &loader ) || !tryResolve( &loader )
          || !tryRequire( &loader ) )
@@ -1391,7 +1914,7 @@ static_assert( sizeof( symbolKindNames ) / sizeof( symbolKindNames[0] ) == SYM_K
 static const char *nodeRoleNames[] =
 {
     "NONE", "SYSTEM", "NAMESPACE", "SECTION", "BODY", "VALUE", "DEFINITION", "INSTANCE",
-    "PROPERTY", "TYPE", "REFERENCE", "FUNCTION", "CONNECTOR", "PUBLISHED",
+    "PROPERTY", "TYPE", "REFERENCE", "FUNCTION", "CONNECTOR", "PUBLISHED", "DEPENDENCY",
 };
 static_assert( sizeof( nodeRoleNames ) / sizeof( nodeRoleNames[0] ) == ROLE_COUNT,
                "nodeRoleNames must have one entry per NodeRole" );
@@ -1454,7 +1977,7 @@ static void Model_formatNode( const Model *m, uint32_t unit, uint32_t index, cha
             Model_append( buffer, size, used, " : %s", symbol->type->name );
         }
 
-        bool refers = info->role == ROLE_REFERENCE || info->role == ROLE_CONNECTOR
+        bool refers = info->role == ROLE_REFERENCE || info->role == ROLE_CONNECTOR || info->role == ROLE_DEPENDENCY
                    || info->role == ROLE_TYPE_HEAD || info->role == ROLE_FUNCTION || info->role == ROLE_PUBLISHED;
         if ( refers && symbol != NULL )
         {
@@ -1477,7 +2000,7 @@ static void Model_formatNode( const Model *m, uint32_t unit, uint32_t index, cha
 
 uint32_t Model_format( const Model *m, char *buffer, uint32_t size )
 {
-    static const char *scopeNames[] = { "NONE", "BUILTIN", "TOP", "NAMESPACE", "SYSTEM", "BODY" };
+    static const char *scopeNames[] = { "NONE", "BUILTIN", "TOP", "NAMESPACE", "SYSTEM", "BODY", "SIMULATION" };
 
     uint32_t used = 0;
 

@@ -25,8 +25,9 @@ enum NodeRole
     ROLE_TYPE_HEAD,              // the `revolute` of a declaration
     ROLE_REFERENCE,              // a name in an expression
     ROLE_FUNCTION,               // the callee of a call
-    ROLE_CONNECTOR,              // the name in a connector slot
+    ROLE_CONNECTOR,              // the name or path in a connector slot
     ROLE_PUBLISHED,              // a name in `provides`
+    ROLE_DEPENDENCY,             // the path of a `use` (D202)
 
     ROLE_COUNT                   // the number of roles; not a role
 };
@@ -79,6 +80,8 @@ struct Symbol
     uint32_t           next;     // the next symbol in that scope
     uint32_t           ownScope; // the scope it opens, or 0
     const ElementInfo *type;     // an element's or definition's catalog entry, or NULL
+    uint32_t           base;     // for a refinement, the definition it refines (D200), else 0
+    bool               provided; // for a system in a namespace, listed in `provides` (D8)
 };
 
 enum ScopeKind
@@ -89,6 +92,7 @@ enum ScopeKind
     SCOPE_NAMESPACE,
     SCOPE_SYSTEM,
     SCOPE_BODY,
+    SCOPE_SIMULATION,            // `simulation { }`, a child of the root system (D176)
 };
 
 // The two scopes every model has.
@@ -126,6 +130,7 @@ struct Model
     uint32_t gravityNode;        // the `gravity:` statement, or 0
     uint32_t simulationUnit;     // the `simulation { }` block, or node 0
     uint32_t simulationNode;
+    uint32_t simulationScope;    // its scope, or 0
 
     Link    *links;              // the assembly's links, made by tryCheckAssembly, else NULL
     uint32_t linkCount;

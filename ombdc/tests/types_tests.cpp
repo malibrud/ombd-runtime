@@ -204,52 +204,61 @@ static TypeCase typeCases[] =
     // literals, and the defaults of `units:` (D147)
     { "system s {\nunits: m, kg;\np = (0, 0, 1);\n}",              "p=point L factor 1" },
     { "system s {\nunits: in, lb;\np = (0, 0, 1);\n}",             "p=point L factor 0.0254" },
-    { "system s {\np = (0, 0, 1) mm;\n}",                          "p=point L factor 0.001" },
-    { "system s {\nx = 5;\n}",                                     "x=scalar 1" },
-    { "system s {\nx = 5 kg;\n}",                                  "x=scalar M factor 1" },
-    { "system s {\nv = [1, 2, 3];\n}",                             "v=list[3] 1" },
-    { "system s {\nv = [1, 2, 3] m/s;\n}",                         "v=list[3] L T-1 factor 1" },
-    { "system s {\nv = [1, 2] mm;\n}",                             "v=list[2] L factor 0.001" },
-    { "system s {\ng = [[1 2; 3 4; 5 6]] N;\n}",                   "g=grid[3x2] L M T-2 factor 1" },
-    { "system s {\nd = diag(1, 2, 3) kg-m2;\n}",                   "d=matrix L2 M factor 1" },
-    { "system s {\nd = diag(1, 2, 3);\n}",                         "d=matrix 1" },
-    { "system s {\nt = \"abc\";\n}",                               "t=string 1" },
+    { "system s { units: m;\np = (0, 0, 1) mm;\n}",                          "p=point L factor 0.001" },
+    { "system s { units: m;\nx = 5;\n}",                                     "x=scalar 1" },
+    { "system s { units: m;\nx = 5 kg;\n}",                                  "x=scalar M factor 1" },
+    { "system s { units: m;\nv = [1, 2, 3];\n}",                             "v=list[3] 1" },
+    { "system s { units: m;\nv = [1, 2, 3] m/s;\n}",                         "v=list[3] L T-1 factor 1" },
+    { "system s { units: m;\nv = [1, 2] mm;\n}",                             "v=list[2] L factor 0.001" },
+    { "system s { units: m;\ng = [[1 2; 3 4; 5 6]] N;\n}",                   "g=grid[3x2] L M T-2 factor 1" },
+    { "system s { units: m;\nd = diag(1, 2, 3) kg-m2;\n}",                   "d=matrix L2 M factor 1" },
+    { "system s { units: m;\nd = diag(1, 2, 3);\n}",                         "d=matrix 1" },
+    { "system s { units: m;\nt = \"abc\";\n}",                               "t=string 1" },
 
-    // `units:` is order-independent, and nested scopes inherit and override it
+    // `units:` is order-independent, and a system's bodies and blocks inherit it
     { "system s {\np = (0, 0, 1);\nunits: m;\n}",                  "p=point L factor 1" },
     { "system s {\npoints { units: ft; p = (0, 0, 1); }\n}",       "p=point L factor 0.3048" },
     { "system s {\nunits: in, lb;\nbodies { b { points { q = (0, 0, 1); } mass: 12; cg: q; inertia: diag(1, 2, 3) lb-in2; } }\n}",
       "q=point L factor 0.0254" },
-    { "system a {\nunits: in;\nsystem b { p = (0, 0, 1); }\n}",    "p=point L factor 0.0254" },
-    { "system a {\nunits: in, lb;\nsystem b {\nunits: mm;\nbodies { c { mass: 2; cg: (0, 0, 0); inertia: diag(1, 2, 3) kg-m2; } }\np = (0, 0, 1);\n}\n}",
+
+    // a nested system states its own, and never takes its parent's (D186)
+    { "system a {\nunits: in;\nsystem b { units: mm; p = (0, 0, 1); }\n}", "p=point L factor 0.001" },
+    { "system a {\nunits: in, lb;\nsystem b {\nunits: mm, kg;\nbodies { c { mass: 2; cg: (0, 0, 0); inertia: diag(1, 2, 3) kg-m2; } }\np = (0, 0, 1);\n}\n}",
       "p=point L factor 0.001" },
+
+    // `simulation` takes the root system's, and its own override them for its literals only (D176)
+    { "system s {\nunits: mm;\n}\nsimulation {\np = (1, 2, 3);\n}", "p=point L factor 0.001" },
+    { "system s {\nunits: m;\n}\nsimulation {\nunits: in;\np = (1, 2, 3);\n}", "p=point L factor 0.0254" },
+    { "system s {\nunits: m;\nq = (1, 2, 3);\n}\nsimulation {\nunits: in;\n}", "q=point L factor 1" },
+    { "system s {\nunits: m, s;\n}\nsimulation {\nhorizon: 2;\noutputs { update: 10 ms; }\n}", "" },
+    { "system s {\nunits: m;\n}\nsimulation {\noutputs { update: 50 Hz; }\n}", "" },
 
     // named values, in any order; a name carries no unit of its own
     { "system s {\nunits: m;\nq = p;\np = (0, 0, 1);\n}",          "q=point L ; p=point L factor 1" },
-    { "system s {\na = 2 m;\nb = a;\nc = b;\n}",                   "a=scalar L factor 1 ; b=scalar L ; c=scalar L" },
+    { "system s { units: m;\na = 2 m;\nb = a;\nc = b;\n}",                   "a=scalar L factor 1 ; b=scalar L ; c=scalar L" },
 
     // arithmetic on scalars (§3.4)
-    { "system s {\na = 2 m;\nb = 3 m;\nc = a + b;\n}",             "a=scalar L factor 1 ; b=scalar L factor 1 ; c=scalar L" },
-    { "system s {\na = 2 m;\nb = 3 mm;\nc = a - b;\n}",            "a=scalar L factor 1 ; b=scalar L factor 0.001 ; c=scalar L" },
-    { "system s {\na = 2 m;\nb = 3 s;\nc = a * b;\n}",             "a=scalar L factor 1 ; b=scalar T factor 1 ; c=scalar L T" },
-    { "system s {\na = 2 m;\nb = 3 s;\nc = a / b;\n}",             "a=scalar L factor 1 ; b=scalar T factor 1 ; c=scalar L T-1" },
-    { "system s {\nx = 7 mod 3;\n}",                               "x=scalar 1" },
-    { "system s {\nx = 7 m mod 3 m;\n}",                           "x=scalar L" },
-    { "system s {\nx = -5 kg;\n}",                                 "x=scalar M" },
-    { "system s {\nx = +5 kg;\n}",                                 "x=scalar M" },             // prefix '+' (D191)
-    { "system s {\nv = +[1, 2, 3] m;\n}",                          "v=vector L" },
-    { "system s {\nx = 2 * 3;\n}",                                 "x=scalar 1" },
-    { "system s {\nx = pi;\n}",                                    "x=scalar 1" },
-    { "system s {\nx = time;\n}",                                  "x=scalar T" },
-    { "system s {\nx = 2 * pi * time;\n}",                         "x=scalar T" },
+    { "system s { units: m;\na = 2 m;\nb = 3 m;\nc = a + b;\n}",             "a=scalar L factor 1 ; b=scalar L factor 1 ; c=scalar L" },
+    { "system s { units: m;\na = 2 m;\nb = 3 mm;\nc = a - b;\n}",            "a=scalar L factor 1 ; b=scalar L factor 0.001 ; c=scalar L" },
+    { "system s { units: m;\na = 2 m;\nb = 3 s;\nc = a * b;\n}",             "a=scalar L factor 1 ; b=scalar T factor 1 ; c=scalar L T" },
+    { "system s { units: m;\na = 2 m;\nb = 3 s;\nc = a / b;\n}",             "a=scalar L factor 1 ; b=scalar T factor 1 ; c=scalar L T-1" },
+    { "system s { units: m;\nx = 7 mod 3;\n}",                               "x=scalar 1" },
+    { "system s { units: m;\nx = 7 m mod 3 m;\n}",                           "x=scalar L" },
+    { "system s { units: m;\nx = -5 kg;\n}",                                 "x=scalar M" },
+    { "system s { units: m;\nx = +5 kg;\n}",                                 "x=scalar M" },             // prefix '+' (D191)
+    { "system s { units: m;\nv = +[1, 2, 3] m;\n}",                          "v=vector L" },
+    { "system s { units: m;\nx = 2 * 3;\n}",                                 "x=scalar 1" },
+    { "system s { units: m;\nx = pi;\n}",                                    "x=scalar 1" },
+    { "system s { units: m;\nx = time;\n}",                                  "x=scalar T" },
+    { "system s { units: m;\nx = 2 * pi * time;\n}",                         "x=scalar T" },
 
     // beside a value with a dimension, a bare literal takes that dimension in
     // a sum, and stays dimensionless in a product
     { "system s {\nunits: m;\nx = 2 m;\ny = x + 1;\n}",            "x=scalar L factor 1 ; y=scalar L" },
     { "system s {\nunits: m;\nx = 2 m;\ny = 1 + x;\n}",            "x=scalar L factor 1 ; y=scalar L" },
     { "system s {\nunits: m;\nx = 2 m;\ny = x mod 3;\n}",          "x=scalar L factor 1 ; y=scalar L" },
-    { "system s {\nx = 2 m;\ny = 3 * x;\n}",                       "x=scalar L factor 1 ; y=scalar L" },
-    { "system s {\nx = 1 + 2;\n}",                                 "x=scalar 1" },
+    { "system s { units: m;\nx = 2 m;\ny = 3 * x;\n}",                       "x=scalar L factor 1 ; y=scalar L" },
+    { "system s { units: m;\nx = 1 + 2;\n}",                                 "x=scalar 1" },
 
     // points and vectors
     { "system s {\nunits: m;\np = (0, 0, 0);\nq = (0, 0, 1);\nv = q - p;\n}",
@@ -261,42 +270,43 @@ static TypeCase typeCases[] =
     { "system s {\nunits: m;\nq = [0, 0, 1] + (1, 2, 3);\n}",      "q=point L" },
     { "system s {\nunits: in;\np = (0, 0, 0);\nq = p - [0, 0, 1];\n}",
       "p=point L factor 0.0254 ; q=point L" },
-    { "system s {\nv = [1, 2, 3] + [4, 5, 6];\n}",                 "v=vector 1" },
-    { "system s {\nv = 2 * [1, 2, 3] m;\n}",                       "v=vector L" },
-    { "system s {\nv = [1, 2, 3] m / 2 s;\n}",                     "v=vector L T-1" },
-    { "system s {\nv = -[1, 2, 3] m;\n}",                          "v=vector L" },
-    { "system s {\nx = [1, 2, 3] N \\. [0, 1, 0] m;\n}",           "x=scalar L2 M T-2" },
-    { "system s {\nv = [1, 2, 3] m \\x [0, 1, 0] N;\n}",           "v=vector L2 M T-2" },
+    { "system s { units: m;\nv = [1, 2, 3] + [4, 5, 6];\n}",                 "v=vector 1" },
+    { "system s { units: m;\nv = 2 * [1, 2, 3] m;\n}",                       "v=vector L" },
+    { "system s { units: m;\nv = [1, 2, 3] m / 2 s;\n}",                     "v=vector L T-1" },
+    { "system s { units: m;\nv = -[1, 2, 3] m;\n}",                          "v=vector L" },
+    { "system s { units: m;\nx = [1, 2, 3] N \\. [0, 1, 0] m;\n}",           "x=scalar L2 M T-2" },
+    { "system s { units: m;\nv = [1, 2, 3] m \\x [0, 1, 0] N;\n}",           "v=vector L2 M T-2" },
 
     // matrices (D42, D143)
-    { "system s {\nm = ^diag(1, 2, 3) kg-m2;\n}",                  "m=matrix L-2 M-1" },
-    { "system s {\nv = diag(1, 2, 3) kg-m2 \\> [0, 0, 1] rad/s;\n}", "v=vector L2 M T-1 A" },
-    { "system s {\nm = [[1 0 0; 0 1 0; 0 0 1]] + diag(1, 2, 3);\n}", "m=matrix 1" },
+    { "system s { units: m;\nm = ^diag(1, 2, 3) kg-m2;\n}",                  "m=matrix L-2 M-1" },
+    { "system s { units: m;\nv = diag(1, 2, 3) kg-m2 \\> [0, 0, 1] rad/s;\n}", "v=vector L2 M T-1 A" },
+    { "system s { units: m;\nm = [[1 0 0; 0 1 0; 0 0 1]] + diag(1, 2, 3);\n}", "m=matrix 1" },
 
     // built-in functions (§4.1)
     { "system s {\nunits: m;\np = mid((0, 0, 0), (0, 0, 1));\n}",  "p=point L" },
     { "system s {\nunits: m;\na = (0, 0, 0);\np = avg(a, a, a);\n}", "a=point L factor 1 ; p=point L" },
-    { "system s {\nx = sin(90 deg);\n}",                           "x=scalar 1" },
+    { "system s { units: m;\nx = sin(90 deg);\n}",                           "x=scalar 1" },
     { "system s {\nunits: deg;\nx = sin(90);\n}",                  "x=scalar 1" },
-    { "system s {\nx = 0.5 in * cos(1 rad);\n}",                   "x=scalar L" },
-    { "system s {\nx = asin(0.5);\n}",                             "x=scalar A" },
-    { "system s {\nx = atan2(1 m, 2 m);\n}",                       "x=scalar A" },
-    { "system s {\nx = atan2(1, 2);\n}",                           "x=scalar A" },
-    { "system s {\nx = sqrt(4);\n}",                               "x=scalar 1" },
-    { "system s {\nx = sqrt(4) m;\n}",                             "x=scalar L factor 1" },
-    { "system s {\nx = abs(-2 m);\n}",                             "x=scalar L" },
-    { "system s {\nx = min(1 m, 2 m, 3 m);\n}",                    "x=scalar L" },
+    { "system s { units: m;\nx = sin(360 deg * 0.25 Hz * time);\n}",         "x=scalar 1" },   // a frequency turned into an angle (D178)
+    { "system s { units: m;\nx = 0.5 in * cos(1 rad);\n}",                   "x=scalar L" },
+    { "system s { units: m;\nx = asin(0.5);\n}",                             "x=scalar A" },
+    { "system s { units: m;\nx = atan2(1 m, 2 m);\n}",                       "x=scalar A" },
+    { "system s { units: m;\nx = atan2(1, 2);\n}",                           "x=scalar A" },
+    { "system s { units: m;\nx = sqrt(4);\n}",                               "x=scalar 1" },
+    { "system s { units: m;\nx = sqrt(4) m;\n}",                             "x=scalar L factor 1" },
+    { "system s { units: m;\nx = abs(-2 m);\n}",                             "x=scalar L" },
+    { "system s { units: m;\nx = min(1 m, 2 m, 3 m);\n}",                    "x=scalar L" },
     { "system s {\nunits: m;\nx = max(2, 1 m);\n}",                "x=scalar L" },
 
     // properties against the catalog (§4)
-    { "gravity: [0, 0, -9.81] m/s2;\nsystem s { }",                "" },
+    { "gravity: [0, 0, -9.81] m/s2;\nsystem s { units: m; }",                "" },
     { "system s {\nunits: m;\np = (0, 0, 0);\nj: revolute, at: p, axis: [0, 1, 0];\n}", "p=point L factor 1" },
     { "system s {\nunits: m;\np = (0, 0, 0);\nj: revolute { at: p; axis: [1, 0, 0]; }\n}", "p=point L factor 1" },
     { "system s {\nunits: m;\np = (0, 0, 0);\nq = (0, 0, 1);\nj: revolute, at: p, axis: q - p;\n}",
       "p=point L factor 1 ; q=point L factor 1" },
     { "system s {\nunits: m;\np = (0, 0, 0);\nv = [0, 1, 0];\nj: revolute, at: p, axis: v;\n}",
       "p=point L factor 1 ; v=list[3] 1" },
-    { "system s {\nbodies { b { mass: 1 kg; cg: (0, 0, 0) m; inertia: [[1 0 0; 0 1 0; 0 0 1]] kg-m2; } }\n}", "" },
+    { "system s { units: m;\nbodies { b { mass: 1 kg; cg: (0, 0, 0) m; inertia: [[1 0 0; 0 1 0; 0 0 1]] kg-m2; } }\n}", "" },
     { "system s {\nunits: m;\np = (0, 0, 0);\nc = TSDA, rate: 10 N/m, damping: 2 N-s/m, free: 0.3;\nk: c, p1: p, p2: p;\n}",
       "p=point L factor 1" },
     { "system s {\nunits: m;\nc = TSDA { rate: 10 N/m; free: 300 mm; }\n}", "" },
@@ -317,8 +327,9 @@ static void test_typeCases( void )
         char shown[256];
         test_showText( shown, sizeof( shown ), kase->text );
 
-        Unit unit;
-        if ( !test_makeUnit( &unit, "a.ombd", kase->text ) )
+        Unit     units[2];
+        uint32_t count = test_makeModelUnits( units, kase->text );
+        if ( count == 0 )
         {
             ut_reportTestResult( false, "%s", shown );
             continue;
@@ -326,7 +337,7 @@ static void test_typeCases( void )
 
         Model     model;
         LoadError error;
-        bool      loaded  = tryLoadModel( &unit, 1, &model, &error );
+        bool      loaded  = tryLoadModel( units, count, &model, &error );
         bool      checked = loaded && tryCheckTypes( &model, &error );
         char      summary[1024];
         summary[0] = '\0';
@@ -345,7 +356,7 @@ static void test_typeCases( void )
         }
 
         if ( loaded ) Model_free( &model );
-        test_freeUnit( &unit );
+        test_freeUnits( units, count );
     }
     ut_endModule();
 }
@@ -378,6 +389,16 @@ static TypeErrorCase typeErrorCases[] =
     { "system s {\nunits: m, kg;\nbodies { b { inertia: diag(1, 2, 3); mass: 1; cg: (0, 0, 0); } }\n}", 3, 23, "must carry a unit" },
     { "gravity: [0, 0, -9.81];\nsystem s { }",                     1, 10, "must carry a unit" },
     { "system s {\nc = TSDA, rate: 10;\n}",                        2, 17, "must carry a unit" },
+
+    // units belong to the system (D186)
+    { "system s {\nunits: m;\nsystem t { }\n}",                    3, 8,  "the system 't' states no 'units:'; every system names its default units" },
+    { "system s {\nx = 1 m;\n}\nsimulation {\nunits: m;\n}",       1, 8,  "the system 's' states no 'units:'" },
+    { "system a {\nunits: in;\nsystem b {\nunits: kg;\np = (0, 0, 1);\n}\n}", 5, 5, "no 'units:' default applies to dimension L" },
+
+    // `update:` takes a frequency or a period (D77)
+    { "system s {\nunits: m;\n}\nsimulation {\noutputs { update: 10 m; }\n}", 5, 19, "'update' takes a frequency or a period, as in '50 Hz' or '20 ms', and this has dimension L" },
+    { "system s {\nunits: m;\n}\nsimulation {\noutputs { update: 10; }\n}",   5, 19, "and this has dimension 1" },
+    { "system s {\nunits: m;\n}\nsimulation {\nhorizon: 2 m;\n}",              5, 10, "'horizon' takes dimension T, and this has dimension L" },
 
     // unit runs, reported where they go wrong
     { "system s {\nx = 5 furlong;\n}",                             2, 7,  "unknown unit 'furlong'" },
@@ -417,6 +438,7 @@ static TypeErrorCase typeErrorCases[] =
     // functions (§4.1)
     { "system s {\nx = sin(2 * pi);\n}",                           2, 9,  "'sin' takes dimension A here, and this has dimension 1" },
     { "system s {\nx = sin(1);\n}",                                2, 9,  "no 'units:' default applies to dimension A" },
+    { "system s {\nx = sin(2 * pi * 0.25 Hz * time);\n}",          2, 9,  "'sin' takes dimension A here, and this has dimension 1" },   // D178
     { "system s {\nx = sqrt(1 m);\n}",                             2, 10, "'sqrt' takes dimension 1 here, and this has dimension L" },
     { "system s {\nx = asin(1 m);\n}",                             2, 10, "'asin' takes dimension 1 here" },
     { "system s {\nx = sin([1, 2, 3] rad);\n}",                    2, 9,  "'sin' takes a scalar here, and this is a list[3]" },
@@ -458,8 +480,9 @@ static void test_typeErrorCases( void )
         char shown[256];
         test_showText( shown, sizeof( shown ), kase->text );
 
-        Unit unit;
-        if ( !test_makeUnit( &unit, "a.ombd", kase->text ) )
+        Unit     units[2];
+        uint32_t count = test_makeModelUnits( units, kase->text );
+        if ( count == 0 )
         {
             ut_reportTestResult( false, "%s", shown );
             continue;
@@ -467,9 +490,10 @@ static void test_typeErrorCases( void )
 
         Model     model;
         LoadError error;
-        bool      loaded  = tryLoadModel( &unit, 1, &model, &error );
+        bool      loaded  = tryLoadModel( units, count, &model, &error );
         bool      checked = loaded && tryCheckTypes( &model, &error );
         bool      pass    = loaded && !checked
+                         && error.unit == 0
                          && error.line == kase->line
                          && error.col  == kase->col
                          && strstr( error.message, kase->fragment ) != NULL;
@@ -479,7 +503,7 @@ static void test_typeErrorCases( void )
         else if ( !pass ) printf( "        %s %u:%u: %s\n", loaded ? "got" : "failed to load at", error.line, error.col, error.message );
 
         if ( loaded ) Model_free( &model );
-        test_freeUnit( &unit );
+        test_freeUnits( units, count );
     }
     ut_endModule();
 }

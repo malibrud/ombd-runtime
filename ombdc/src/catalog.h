@@ -48,6 +48,7 @@ enum ExpectedDimension
     DIM_INERTIA,                 // mass·length²
     DIM_STIFFNESS,               // force/length
     DIM_DAMPING,                 // force·time/length
+    DIM_RATE_OR_PERIOD,          // a frequency or a period, as `update:` takes (D77)
 
     DIM_COUNT                    // the number of entries; not an entry
 };
@@ -103,6 +104,8 @@ struct ElementInfo
 extern const ElementInfo Catalog_topLevel;
 extern const ElementInfo Catalog_system;
 extern const ElementInfo Catalog_body;
+extern const ElementInfo Catalog_simulation;   // §4.11
+extern const ElementInfo Catalog_outputs;      // `outputs { }` in `simulation` (D82)
 
 // The built-in names (§4.1, D144) and the built-in types (§4).
 extern const BuiltinValue Catalog_builtinValues[];
@@ -128,6 +131,7 @@ Dimension ExpectedDimension_value( ExpectedDimension expected );
 // "scalar", "point", ...
 const char *ValueType_name( ValueType type );
 
-// The bare blocks recognized in a system and in a body (§3.2).
+// The bare blocks recognized in a system, in a body and in `simulation` (§3.2).
 bool Catalog_isSystemSection( const char *name, uint32_t length );
 bool Catalog_isBodySection( const char *name, uint32_t length );
+bool Catalog_isSimulationSection( const char *name, uint32_t length );

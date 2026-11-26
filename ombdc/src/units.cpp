@@ -519,3 +519,10 @@ bool tryReadDefaultUnit( const char *name, uint32_t length, BaseDimension *base,
     }
     return true;
 }
+
+bool Units_isUnitName( const char *name, uint32_t length )
+{
+    Measure measure;
+    bool    isPound;
+    return Units_lookup( name, length, POUND_MASS, &measure, &isPound );
+}

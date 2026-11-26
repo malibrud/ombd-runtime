@@ -2,8 +2,11 @@
 //
 // The stage after type checking. It walks every chain line, checks each link
 // against its connector's endpoint signature (D50, D52, D159), checks that
-// every declared connector is wired exactly once (D162), and keeps the links
-// on the model as a flat array: the topology the IR is lowered from.
+// every declared connector is wired exactly once (D162) and that no link joins
+// an endpoint to itself (D179), and keeps the links on the model as a flat
+// array: the topology the IR is lowered from. The links of every `assembly`
+// block pool (D180), and a parent may wire a nested system's connector and
+// bodies by path (D181, D182).
 //
 // Not implemented yet, each with its own error: ports and indexed names as
 // endpoints. Drivers (`.pos <-`, `.force <-`) come with the first model that
@@ -17,7 +20,7 @@ struct Link
 {
     uint32_t unit;               // the unit holding the chain line
     uint32_t node;               // the first endpoint's node, where the link starts in the text
-    uint32_t connector;          // the connector instance's symbol
+    uint32_t connector;          // the connector instance's symbol, or a built-in connector type's for a fresh one (D170)
     uint32_t from;               // the endpoint taking the connector's first attachment: a body's symbol, or `world`'s
     uint32_t to;                 // the endpoint taking its second
 };

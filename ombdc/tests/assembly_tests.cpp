@@ -35,9 +35,9 @@ static void test_linkSummary( const Model *m, char *out, uint32_t size )
 }
 
 // Run every stage through §3.7. `loaded` says whether the model needs freeing.
-static bool test_checkAssembly( Unit *unit, Model *model, LoadError *error, bool *loaded )
+static bool test_checkAssembly( Unit *units, uint32_t count, Model *model, LoadError *error, bool *loaded )
 {
-    *loaded = tryLoadModel( unit, 1, model, error );
+    *loaded = tryLoadModel( units, count, model, error );
     return *loaded && tryCheckTypes( model, error ) && tryCheckAssembly( model, error );
 }
 
@@ -54,33 +54,46 @@ struct AssemblyCase
 static AssemblyCase assemblyCases[] =
 {
     // no connectors, no links
-    { "system s {\nbodies { a " TEST_BODY " }\n}", "" },
+    { "system s { units: m;\nbodies { a " TEST_BODY " }\n}", "" },
 
     // one link, in endpoint order (D159)
-    { "system s {\nbodies { a " TEST_BODY " }\nj: " TEST_JOINT ";\nassembly { world <j> a; }\n}", "j world->a" },
-    { "system s {\nbodies { a " TEST_BODY " }\nj: " TEST_JOINT ";\nassembly { a <j> world; }\n}", "j a->world" },
+    { "system s { units: m;\nbodies { a " TEST_BODY " }\nj: " TEST_JOINT ";\nassembly { world <j> a; }\n}", "j world->a" },
+    { "system s { units: m;\nbodies { a " TEST_BODY " }\nj: " TEST_JOINT ";\nassembly { a <j> world; }\n}", "j a->world" },
 
     // a chain line is a link per slot (D30)
-    { "system s {\nbodies { a " TEST_BODY " b " TEST_BODY " }\nj: " TEST_JOINT ";\nk: " TEST_JOINT ";\n"
+    { "system s { units: m;\nbodies { a " TEST_BODY " b " TEST_BODY " }\nj: " TEST_JOINT ";\nk: " TEST_JOINT ";\n"
       "assembly { world <j> a <k> b; }\n}", "j world->a ; k a->b" },
 
     // a closed loop is lines meeting at the same bodies, and a TSDA joins two bodies (§4.4)
-    { "system s {\nbodies { a " TEST_BODY " b " TEST_BODY " }\nj: " TEST_JOINT ";\nk: " TEST_JOINT ";\nc: " TEST_SPRING ";\n"
+    { "system s { units: m;\nbodies { a " TEST_BODY " b " TEST_BODY " }\nj: " TEST_JOINT ";\nk: " TEST_JOINT ";\nc: " TEST_SPRING ";\n"
       "assembly { world <j> a; a <k> b; b <c> world; }\n}", "j world->a ; k a->b ; c b->world" },
 
     // an instance of a shared definition is a connector too (D152)
-    { "system s {\nbodies { a " TEST_BODY " }\ncoil = TSDA, rate: 1 N/m, free: 1 m;\n"
+    { "system s { units: m;\nbodies { a " TEST_BODY " }\ncoil = TSDA, rate: 1 N/m, free: 1 m;\n"
       "c: coil, p1: (0, 0, 0) m, p2: (0, 0, 0) m;\nassembly { world <c> a; }\n}", "c world->a" },
 
     // sections carry no meaning, so links pool across `assembly` blocks, in any order (D22, §0)
-    { "system s {\nassembly { a <k> b; }\nbodies { a " TEST_BODY " b " TEST_BODY " }\nj: " TEST_JOINT ";\nk: " TEST_JOINT ";\n"
+    { "system s { units: m;\nassembly { a <k> b; }\nbodies { a " TEST_BODY " b " TEST_BODY " }\nj: " TEST_JOINT ";\nk: " TEST_JOINT ";\n"
       "assembly { world <j> a; }\n}", "k a->b ; j world->a" },
 
     // a nested system wires its own connectors
-    { "system s {\nsystem t {\nbodies { a " TEST_BODY " }\nj: " TEST_JOINT ";\nassembly { world <j> a; }\n}\n}", "j world->a" },
+    { "system s { units: m;\nsystem t { units: m;\nbodies { a " TEST_BODY " }\nj: " TEST_JOINT ";\nassembly { world <j> a; }\n}\n}", "j world->a" },
 
-    // §3.7 doesn't forbid a body linked to itself (an open question for the specification)
-    { "system s {\nbodies { a " TEST_BODY " }\nj: " TEST_JOINT ";\nassembly { a <j> a; }\n}", "j a->a" },
+    // or an enclosing system wires them, and its bodies, by path (D181, D182)
+    { "system s { units: m;\nsystem t { units: m;\nj: " TEST_JOINT ";\n}\nbodies { b " TEST_BODY " }\nassembly { world <t.j> b; }\n}",
+      "j world->b" },
+    { "system s { units: m;\nsystem t { units: m;\nbodies { u " TEST_BODY " }\nj: " TEST_JOINT ";\n}\nbodies { b " TEST_BODY " }\n"
+      "assembly { b <t.j> t.u; }\n}", "j b->u" },
+    { "system s { units: m;\nsystem t { units: m;\nsystem v { units: m;\nbodies { u " TEST_BODY " }\nj: " TEST_JOINT ";\n}\n}\n"
+      "assembly { world <t.v.j> t.v.u; }\n}", "j world->u" },
+
+    // a built-in connector type with no properties, written in the slot, is a fresh instance at each use (D170)
+    { "system s { units: m;\nbodies { a " TEST_BODY " b " TEST_BODY " }\nassembly { world <lock> a; a <lock> b; }\n}",
+      "lock world->a ; lock a->b" },
+
+    // each link is checked on its own, so a chain may close a loop (D179)
+    { "system s { units: m;\nbodies { a " TEST_BODY " b " TEST_BODY " }\nj: " TEST_JOINT ";\nk: " TEST_JOINT ";\n"
+      "assembly { world <lock> a; a <j> b <k> a; }\n}", "lock world->a ; j a->b ; k b->a" },
 };
 
 static void test_assemblyCases( void )
@@ -93,8 +106,9 @@ static void test_assemblyCases( void )
         char shown[512];
         test_showText( shown, sizeof( shown ), kase->text );
 
-        Unit unit;
-        if ( !test_makeUnit( &unit, "a.ombd", kase->text ) )
+        Unit     units[2];
+        uint32_t count = test_makeModelUnits( units, kase->text );
+        if ( count == 0 )
         {
             ut_reportTestResult( false, "%s", shown );
             continue;
@@ -103,7 +117,7 @@ static void test_assemblyCases( void )
         Model     model;
         LoadError error;
         bool      loaded;
-        bool      checked = test_checkAssembly( &unit, &model, &error, &loaded );
+        bool      checked = test_checkAssembly( units, count, &model, &error, &loaded );
         char      summary[512];
         summary[0] = '\0';
         if ( checked ) test_linkSummary( &model, summary, sizeof( summary ) );
@@ -121,7 +135,7 @@ static void test_assemblyCases( void )
         }
 
         if ( loaded ) Model_free( &model );
-        test_freeUnit( &unit );
+        test_freeUnits( units, count );
     }
     ut_endModule();
 }
@@ -141,35 +155,53 @@ struct AssemblyErrorCase
 static AssemblyErrorCase assemblyErrorCases[] =
 {
     // exactly one link (D162)
-    { "system s {\nj: " TEST_JOINT ";\n}",                                                        2, 1,  "'j' is declared but never wired (D162)" },
-    { "system s {\nc: " TEST_SPRING ";\n}",                                                       2, 1,  "'c' is declared but never wired" },
-    { "system s {\nsystem t {\nj: " TEST_JOINT ";\n}\n}",                                         3, 1,  "'j' is declared but never wired" },
-    { "system s {\nbodies { a " TEST_BODY " b " TEST_BODY " }\nj: " TEST_JOINT ";\nassembly { world <j> a <j> b; }\n}",
+    { "system s { units: m;\nj: " TEST_JOINT ";\n}",                                                        2, 1,  "'j' is declared but never wired (D162)" },
+    { "system s { units: m;\nc: " TEST_SPRING ";\n}",                                                       2, 1,  "'c' is declared but never wired" },
+    { "system s { units: m;\nsystem t { units: m;\nj: " TEST_JOINT ";\n}\n}",                                         3, 1,  "'j' is declared but never wired" },
+    { "system s { units: m;\nbodies { a " TEST_BODY " b " TEST_BODY " }\nj: " TEST_JOINT ";\nassembly { world <j> a <j> b; }\n}",
       4, 25, "'j' is already wired at 4:19; a connector is in exactly one link (D162)" },
-    { "system s {\nbodies { a " TEST_BODY " }\nj: " TEST_JOINT ";\nassembly { world <j> a; }\nassembly { a <j> world; }\n}",
+    { "system s { units: m;\nbodies { a " TEST_BODY " }\nj: " TEST_JOINT ";\nassembly { world <j> a; }\nassembly { a <j> world; }\n}",
       5, 15, "'j' is already wired at 4:19" },
 
     // endpoints against the signature (§3.7, D159)
-    { "system s {\np = 1;\nj: " TEST_JOINT ";\nassembly { world <j> p; }\n}",
+    { "system s { units: m;\np = 1;\nj: " TEST_JOINT ";\nassembly { world <j> p; }\n}",
       4, 22, "'p' is a value, but the second endpoint of the revolute 'j' must be a body or 'world'" },
-    { "system s {\np = 1;\nbodies { a " TEST_BODY " }\nj: " TEST_JOINT ";\nassembly { p <j> a; }\n}",
+    { "system s { units: m;\np = 1;\nbodies { a " TEST_BODY " }\nj: " TEST_JOINT ";\nassembly { p <j> a; }\n}",
       5, 12, "'p' is a value, but the first endpoint of the revolute 'j' must be a body or 'world'" },
-    { "system s {\nj: " TEST_JOINT ";\nk: " TEST_JOINT ";\nassembly { world <j> k; }\n}",
+    { "system s { units: m;\nj: " TEST_JOINT ";\nk: " TEST_JOINT ";\nassembly { world <j> k; }\n}",
       4, 22, "'k' is a revolute, but the second endpoint" },
-    { "system s {\nj: " TEST_JOINT ";\nassembly { world <j> time; }\n}",
+    { "system s { units: m;\nj: " TEST_JOINT ";\nassembly { world <j> time; }\n}",
       3, 22, "'time' is a built-in value, but the second endpoint" },
-    { "system s {\ncoil = TSDA, rate: 1 N/m, free: 1 m;\nc: coil, p1: (0, 0, 0) m, p2: (0, 0, 0) m;\nassembly { world <c> coil; }\n}",
+    { "system s { units: m;\ncoil = TSDA, rate: 1 N/m, free: 1 m;\nc: coil, p1: (0, 0, 0) m, p2: (0, 0, 0) m;\nassembly { world <c> coil; }\n}",
       4, 22, "'coil' is a shared definition, but the second endpoint of the TSDA 'c' must be a body or 'world'" },
 
-    // a connector must be declared where the line can see it (§3.2)
-    { "system s {\nsystem t {\nj: " TEST_JOINT ";\n}\nbodies { a " TEST_BODY " }\nassembly { world <j> a; }\n}",
-      6, 19, "'j' is not a declared connector" },
+    // lookup stops at a nested system, so a bare name doesn't reach its connector; a path does (D169, D181)
+    { "system s { units: m;\nsystem t { units: m;\nj: " TEST_JOINT ";\n}\nbodies { a " TEST_BODY " }\nassembly { world <j> a; }\n}",
+      6, 19, "'j' is neither a declared connector nor a built-in connector type" },
+
+    // exactly one link spans the system tree (D162, D181)
+    { "system s { units: m;\nsystem t { units: m;\nbodies { u " TEST_BODY " }\nj: " TEST_JOINT ";\nassembly { world <j> u; }\n}\n"
+      "assembly { world <t.j> t.u; }\n}", 7, 19, "'j' is already wired at 5:19" },
+
+    // a path endpoint is checked against the signature like any other (D182)
+    { "system s { units: m;\nsystem t { units: m;\nk: " TEST_JOINT ";\n}\nj: " TEST_JOINT ";\nassembly { world <j> t.k; }\n}",
+      6, 22, "'k' is a revolute, but the second endpoint of the revolute 'j' must be a body or 'world'" },
+
+    // a link's two endpoints differ (D179)
+    { "system s { units: m;\nbodies { a " TEST_BODY " }\nj: " TEST_JOINT ";\nassembly { a <j> a; }\n}",
+      4, 15, "'j' links 'a' to itself; a link's two endpoints must differ (D179)" },
+    { "system s { units: m;\nj: " TEST_JOINT ";\nassembly { world <j> world; }\n}",
+      3, 19, "'j' links 'world' to itself" },
+    { "system s { units: m;\nsystem t { units: m;\nbodies { u " TEST_BODY " }\nj: " TEST_JOINT ";\n}\nassembly { t.u <t.j> t.u; }\n}",
+      6, 17, "'j' links 'u' to itself" },
+
+    // a built-in type in a slot has no properties, so it must need none (D170, §4)
+    { "system s { units: m;\nbodies { a " TEST_BODY " }\nassembly { world <revolute> a; }\n}",
+      3, 19, "a 'revolute' written in a slot is a fresh instance with no properties, and it requires 'at'" },
 
     // not implemented yet
-    { "system s {\nbodies { a " TEST_BODY " }\nj: " TEST_JOINT ";\nassembly { world <j> a.flange; }\n}",
+    { "system s { units: m;\nbodies { a " TEST_BODY " }\nj: " TEST_JOINT ";\nassembly { world <j> a.flange; }\n}",
       4, 22, "not implemented yet: a port as an endpoint" },
-    { "system s {\nsystem t {\nj: " TEST_JOINT ";\n}\nbodies { b " TEST_BODY " }\nassembly { world <t.j> b; }\n}",
-      6, 19, "not implemented yet: a connector in a nested system, by path (D181)" },
 };
 
 static void test_assemblyErrorCases( void )
@@ -182,8 +214,9 @@ static void test_assemblyErrorCases( void )
         char shown[512];
         test_showText( shown, sizeof( shown ), kase->text );
 
-        Unit unit;
-        if ( !test_makeUnit( &unit, "a.ombd", kase->text ) )
+        Unit     units[2];
+        uint32_t count = test_makeModelUnits( units, kase->text );
+        if ( count == 0 )
         {
             ut_reportTestResult( false, "%s", shown );
             continue;
@@ -192,8 +225,9 @@ static void test_assemblyErrorCases( void )
         Model     model;
         LoadError error;
         bool      loaded;
-        bool      checked = test_checkAssembly( &unit, &model, &error, &loaded );
+        bool      checked = test_checkAssembly( units, count, &model, &error, &loaded );
         bool      pass    = !checked
+                         && error.unit == 0
                          && error.line == kase->line
                          && error.col  == kase->col
                          && strstr( error.message, kase->fragment ) != NULL;
@@ -203,7 +237,7 @@ static void test_assemblyErrorCases( void )
         else if ( !pass ) printf( "        got %u:%u: %s\n", error.line, error.col, error.message );
 
         if ( loaded ) Model_free( &model );
-        test_freeUnit( &unit );
+        test_freeUnits( units, count );
     }
     ut_endModule();
 }
@@ -235,7 +269,7 @@ static void test_goldenAssembly( const char *examplesDir, const char *goldenDir,
             Model     model;
             LoadError error;
             bool      loaded;
-            if ( test_checkAssembly( &unit, &model, &error, &loaded ) )
+            if ( test_checkAssembly( &unit, 1, &model, &error, &loaded ) )
             {
                 uint32_t size = Model_formatAssembly( &model, NULL, 0 );
                 dump = (char *)malloc( (size_t)size + 1 );

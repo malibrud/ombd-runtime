@@ -11,12 +11,23 @@
 
 static const PropertyInfo catalogTopLevelProperties[] =
 {
-    { "gravity", VALUE_EXPRESSION, false, REQ_OPTIONAL, TYPE_VECTOR, DIM_ACCELERATION },   // §4.11
+    { "gravity", VALUE_EXPRESSION, false, REQ_OPTIONAL, TYPE_VECTOR, DIM_ACCELERATION },   // §4.11; once per model (D184), checked by the loader
 };
 
 static const PropertyInfo catalogSystemProperties[] =
 {
     { "units", VALUE_UNIT, false, REQ_OPTIONAL, TYPE_NONE, DIM_NONE }, // §3.5
+};
+
+static const PropertyInfo catalogSimulationProperties[] = // §4.11
+{
+    { "units",   VALUE_UNIT,       false, REQ_OPTIONAL, TYPE_NONE,   DIM_NONE },   // overrides the root system's, here only (D176)
+    { "horizon", VALUE_EXPRESSION, false, REQ_OPTIONAL, TYPE_SCALAR, DIM_TIME },
+};
+
+static const PropertyInfo catalogOutputsProperties[] =    // §4.11, D82
+{
+    { "update", VALUE_EXPRESSION, false, REQ_OPTIONAL, TYPE_SCALAR, DIM_RATE_OR_PERIOD },
 };
 
 static const PropertyInfo catalogBodyProperties[] =      // §4.2
@@ -44,6 +55,8 @@ static const PropertyInfo catalogTsdaProperties[] =      // §4.4
 static_assert( CATALOG_COUNT( catalogTopLevelProperties ) <= CATALOG_MAX_PROPERTIES, "raise CATALOG_MAX_PROPERTIES" );
 static_assert( CATALOG_COUNT( catalogSystemProperties )   <= CATALOG_MAX_PROPERTIES, "raise CATALOG_MAX_PROPERTIES" );
 static_assert( CATALOG_COUNT( catalogBodyProperties )     <= CATALOG_MAX_PROPERTIES, "raise CATALOG_MAX_PROPERTIES" );
+static_assert( CATALOG_COUNT( catalogSimulationProperties ) <= CATALOG_MAX_PROPERTIES, "raise CATALOG_MAX_PROPERTIES" );
+static_assert( CATALOG_COUNT( catalogOutputsProperties )  <= CATALOG_MAX_PROPERTIES, "raise CATALOG_MAX_PROPERTIES" );
 static_assert( CATALOG_COUNT( catalogRevoluteProperties ) <= CATALOG_MAX_PROPERTIES, "raise CATALOG_MAX_PROPERTIES" );
 static_assert( CATALOG_COUNT( catalogTsdaProperties )     <= CATALOG_MAX_PROPERTIES, "raise CATALOG_MAX_PROPERTIES" );
 
@@ -52,12 +65,17 @@ static_assert( CATALOG_COUNT( catalogTsdaProperties )     <= CATALOG_MAX_PROPERT
 extern const ElementInfo Catalog_topLevel = { "the top level", catalogTopLevelProperties, CATALOG_COUNT( catalogTopLevelProperties ), CATALOG_NOT_A_CONNECTOR };
 extern const ElementInfo Catalog_system   = { "a system",      catalogSystemProperties,   CATALOG_COUNT( catalogSystemProperties ),   CATALOG_NOT_A_CONNECTOR };
 extern const ElementInfo Catalog_body     = { "a body",        catalogBodyProperties,     CATALOG_COUNT( catalogBodyProperties ),     CATALOG_NOT_A_CONNECTOR };
+extern const ElementInfo Catalog_simulation = { "the simulation", catalogSimulationProperties, CATALOG_COUNT( catalogSimulationProperties ), CATALOG_NOT_A_CONNECTOR };
+extern const ElementInfo Catalog_outputs  = { "outputs",       catalogOutputsProperties,  CATALOG_COUNT( catalogOutputsProperties ),  CATALOG_NOT_A_CONNECTOR };
 
+// `lock` has no properties, so it can also be written directly in a slot (§4.3, D170).
+static const ElementInfo catalogLock     = { "lock",     NULL,                      0,                                          2, { ENDPOINT_BODY, ENDPOINT_BODY } };
 static const ElementInfo catalogRevolute = { "revolute", catalogRevoluteProperties, CATALOG_COUNT( catalogRevoluteProperties ), 2, { ENDPOINT_BODY, ENDPOINT_BODY } };
 static const ElementInfo catalogTsda     = { "TSDA",     catalogTsdaProperties,     CATALOG_COUNT( catalogTsdaProperties ),     2, { ENDPOINT_BODY, ENDPOINT_BODY } };
 
 extern const ElementInfo *const Catalog_types[] =
 {
+    &catalogLock,
     &catalogRevolute,
     &catalogTsda,
 };
@@ -93,6 +111,8 @@ static const char *const catalogSystemSections[] =
 };
 
 static const char *const catalogBodySections[] = { "points", "frames" };
+
+static const char *const catalogSimulationSections[] = { "controls", "signals", "drivers", "outputs" };   // §3.2, D36, D82
 
 //////////////////////////////////////////////////////////////////////////////
 // Lookups
@@ -171,6 +191,15 @@ bool Catalog_isBodySection( const char *name, uint32_t length )
     for ( uint32_t i = 0 ; i < CATALOG_COUNT( catalogBodySections ) ; i++ )
     {
         if ( catalogIsName( catalogBodySections[i], name, length ) ) return true;
+    }
+    return false;
+}
+
+bool Catalog_isSimulationSection( const char *name, uint32_t length )
+{
+    for ( uint32_t i = 0 ; i < CATALOG_COUNT( catalogSimulationSections ) ; i++ )
+    {
+        if ( catalogIsName( catalogSimulationSections[i], name, length ) ) return true;
     }
     return false;
 }

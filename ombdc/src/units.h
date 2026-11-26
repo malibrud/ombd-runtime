@@ -71,3 +71,7 @@ bool tryReadUnitRun( const Token *tokens, uint32_t first, uint32_t last, const c
 // Read one name from a `units:` list. It must be a unit of one base dimension,
 // and `lb` is the pound-mass (D147). `error->token` is left at 0.
 bool tryReadDefaultUnit( const char *name, uint32_t length, BaseDimension *base, Measure *measure, UnitError *error );
+
+// Is `name` a unit of §3.5: an SI unit with or without a prefix, or a non-SI
+// unit? A shared definition may not take one (D177).
+bool Units_isUnitName( const char *name, uint32_t length );

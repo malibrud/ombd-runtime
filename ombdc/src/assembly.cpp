@@ -14,7 +14,7 @@
 struct Wiring
 {
     bool     wired;
-    uint32_t token;              // its name in the slot
+    uint32_t token;              // the slot's first token
 };
 
 // The stage's state. It lives on tryCheckAssembly's stack.
@@ -75,6 +75,7 @@ static void Assembly_describe( const Symbol *symbol, char *buffer, uint32_t size
     case SYM_DEFINITION:    what = "a shared definition"; break;
     case SYM_SYSTEM:        what = "a system";           break;
     case SYM_BUILTIN_VALUE: what = Assembly_isWorld( symbol ) ? "the ground" : "a built-in value"; break;
+    case SYM_BUILTIN_TYPE:  what = "a built-in type";    break;
     case SYM_INSTANCE:
         if ( symbol->type != NULL )
         {
@@ -117,6 +118,7 @@ static bool tryReadEndpoint( Assembler *a, uint32_t unit, uint32_t endpoint, uin
     case NODE_NAME:
         break;
     case NODE_ACCESS:
+        if ( Assembly_info( a, unit, endpoint )->symbol != 0 ) break;   // a path into a nested system (D182)
         return Assembly_failAt( a, unit, node->firstToken, "not implemented yet: a port as an endpoint" );
     case NODE_INDEX:
         return Assembly_failAt( a, unit, node->firstToken, "not implemented yet: an indexed endpoint" );
@@ -147,12 +149,13 @@ static bool tryReadEndpoint( Assembler *a, uint32_t unit, uint32_t endpoint, uin
 //////////////////////////////////////////////////////////////////////////////
 
 // The connector named in a slot: an instance of a connector type, not yet
-// wired anywhere else (D162).
+// wired anywhere else (D162), or a built-in connector type written directly,
+// which is a fresh instance at each use and so must need no properties (D170).
 static bool tryReadConnector( Assembler *a, uint32_t unit, uint32_t slot, uint32_t *connector )
 {
     Model      *m     = a->model;
     uint32_t    name  = Assembly_node( a, unit, slot )->child;
-    uint32_t    token = Assembly_node( a, unit, name )->token;
+    uint32_t    token = Assembly_node( a, unit, name )->firstToken;
     uint32_t    found = Assembly_info( a, unit, name )->symbol;
     Symbol     *s     = &m->symbols[ found ];
 
@@ -163,8 +166,22 @@ static bool tryReadConnector( Assembler *a, uint32_t unit, uint32_t slot, uint32
         return Assembly_failAt( a, unit, token, "'%.*s' is %s, not a connector (§3.7)", (int)s->length, s->name, what );
     }
 
-    // A connector is wired only from its own system, which is one text, so
-    // both uses are in this unit.
+    if ( s->kind == SYM_BUILTIN_TYPE )
+    {
+        for ( uint32_t i = 0 ; i < s->type->propertyCount ; i++ )
+        {
+            const PropertyInfo *property = &s->type->properties[i];
+            if ( property->requirement != REQ_REQUIRED ) continue;
+            return Assembly_failAt( a, unit, token, "a '%s' written in a slot is a fresh instance with no properties, and it requires "
+                                                    "'%s'; declare an instance and wire that (§3.7, §4)", s->type->name, property->name );
+        }
+        *connector = found;
+        return true;
+    }
+
+    // A connector is wired from its own system or an enclosing one (D181).
+    // Either way that is the text the system is written in, since a nested
+    // system is written inside its parent, so both uses are in this unit.
     Wiring *w = &a->wiring[ found ];
     if ( w->wired )
     {
@@ -199,6 +216,16 @@ static bool tryCheckChain( Assembler *a, uint32_t unit, uint32_t chain )
         if ( !tryReadEndpoint( a, unit, from, link.connector, 0, &link.from ) ) return false;
         if ( !tryReadEndpoint( a, unit, to,   link.connector, 1, &link.to ) )   return false;
 
+        // Each link on its own: `a <j1> b <j2> a` is a closed loop (D179).
+        if ( link.from == link.to )
+        {
+            const Symbol *c = &m->symbols[ link.connector ];
+            const Symbol *e = &m->symbols[ link.from ];
+            uint32_t named = Assembly_node( a, unit, slot )->child;
+            return Assembly_failAt( a, unit, Assembly_node( a, unit, named )->firstToken, "'%.*s' links '%.*s' to itself; "
+                                    "a link's two endpoints must differ (D179)", (int)c->length, c->name, (int)e->length, e->name );
+        }
+
         m->links[ m->linkCount++ ] = link;
         from = to;
     }
@@ -231,8 +258,9 @@ static bool tryCheckNode( Assembler *a, uint32_t unit, uint32_t node )
     }
 }
 
-// Every declared connector instance is wired (D162). A connector inside a
-// nested system must be wired there, since lookup stops at the system.
+// Every declared connector instance is wired (D162). A nested system's
+// connector may be wired by any enclosing system (D181), so this waits until
+// every chain line has been seen.
 static bool tryCheckAllWired( Assembler *a )
 {
     const Model *m = a->model;

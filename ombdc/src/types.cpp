@@ -5,7 +5,10 @@
 //   1. tryCollectDefaults   read every `units:` statement into a per-scope table
 //   2. tryCheckBlock        check every value and every property
 //
-// The defaults come first because declarations are order-independent (§0).
+// and then check that every system states `units:` (D186). The defaults come
+// first because declarations are order-independent (§0). They pass from a
+// system to its bodies and blocks, and to `simulation` from the root system,
+// but never into a nested system (D186).
 // For the same reason a named value is checked the first time it is needed,
 // and remembered.
 //
@@ -30,6 +33,7 @@
 // The `units:` defaults set in one scope.
 struct ScopeDefaults
 {
+    bool    stated;              // the scope has a `units:` statement
     bool    set[ BASE_COUNT ];
     Measure measure[ BASE_COUNT ];
 };
@@ -454,13 +458,15 @@ static bool tryShapeLiteral( Checker *c, Site site, uint32_t node )
     }
 }
 
-// The default unit for this base dimension, from the scope outward (D147).
+// The default unit for this base dimension, from the scope outward as far as
+// its system, and no further (D147, D186).
 static const Measure *Checker_findDefault( const Checker *c, uint32_t scope, BaseDimension base )
 {
     for ( ; scope != 0 ; scope = c->model->scopes[ scope ].parent )
     {
         const ScopeDefaults *d = &c->defaults[ scope ];
         if ( d->set[ base ] ) return &d->measure[ base ];
+        if ( c->model->scopes[ scope ].kind == SCOPE_SYSTEM ) break;
     }
     return NULL;
 }
@@ -974,7 +980,7 @@ static bool tryCheckProperty( Checker *c, Site site, uint32_t value, const Prope
 {
     if ( property->space != VALUE_EXPRESSION ) return true;
 
-    bool      any    = property->dimension == DIM_ANY;
+    bool      any    = property->dimension == DIM_ANY || property->dimension == DIM_RATE_OR_PERIOD;
     Dimension wanted = ExpectedDimension_value( property->dimension );
     if ( !tryInfer( c, site, value, any ? NULL : &wanted ) ) return false;
 
@@ -987,6 +993,22 @@ static bool tryCheckProperty( Checker *c, Site site, uint32_t value, const Prope
         char type[64];
         ValueInfo_formatType( v, type, sizeof( type ) );
         return Checker_failAt( c, site.unit, at, "'%s' takes a %s, and this is a %s (§4)", property->name, ValueType_name( property->type ), type );
+    }
+
+    // `update:` takes a frequency or a period (D77). Neither is one base
+    // dimension to the first power, so a bare number takes no default.
+    if ( property->dimension == DIM_RATE_OR_PERIOD )
+    {
+        Dimension period = ExpectedDimension_value( DIM_TIME );
+        Dimension none   = Dimension_none();
+        Dimension rate   = Dimension_divide( &none, &period );
+        if ( !Dimension_equal( &v->dimension, &period ) && !Dimension_equal( &v->dimension, &rate ) )
+        {
+            char got[ DIMENSION_TEXT_SIZE ];
+            Dimension_format( &v->dimension, got, sizeof( got ) );
+            return Checker_failAt( c, site.unit, at, "'%s' takes a frequency or a period, as in '50 Hz' or '20 ms', "
+                                                     "and this has dimension %s (D77)", property->name, got );
+        }
     }
 
     if ( !any && !Dimension_equal( &v->dimension, &wanted ) )
@@ -1051,6 +1073,11 @@ static bool Checker_innerBlock( const Checker *c, uint32_t unit, uint32_t statem
     case NODE_SYSTEM:
         *block = Checker_next( c, unit, first );
         *inner = c->model->symbols[ info->symbol ].ownScope;
+        return true;
+
+    case NODE_SIMULATION:
+        *block = first;
+        *inner = c->model->simulationScope;
         return true;
 
     case NODE_SCOPE:
@@ -1139,6 +1166,7 @@ static bool tryReadDefaults( Checker *c, uint32_t unit, uint32_t statement, uint
         {
             return Checker_failAt( c, unit, at, "'units:' sets %s more than once (D147)", baseNames[ base ] );
         }
+        d->stated          = true;
         d->set[ base ]     = true;
         d->measure[ base ] = measure;
     }
@@ -1162,6 +1190,23 @@ static bool tryCollectDefaults( Checker *c, uint32_t unit, uint32_t block, uint3
         {
             if ( !tryReadDefaults( c, unit, s, scope ) ) return false;
         }
+    }
+    return true;
+}
+
+// Every system states `units:`, even if every value in it carries its own, so
+// that its convention is always written down (D186). Checked after every
+// other type error, in the order the systems were declared.
+static bool tryRequireUnits( Checker *c )
+{
+    const Model *m = c->model;
+    for ( uint32_t s = 1 ; s < m->symbolCount ; s++ )
+    {
+        const Symbol *system = &m->symbols[ s ];
+        if ( system->kind != SYM_SYSTEM || c->defaults[ system->ownScope ].stated ) continue;
+        return Checker_failAt( c, system->unit, system->token, "the system '%.*s' states no 'units:'; every system names its "
+                                                               "default units, even if every value carries its own (D186)",
+                               (int)system->length, system->name );
     }
     return true;
 }
@@ -1197,6 +1242,7 @@ bool tryCheckTypes( Model *model, LoadError *error )
     bool ok = true;
     for ( uint32_t u = 0 ; ok && u < model->unitCount ; u++ ) ok = tryCollectDefaults( &checker, u, 0, SCOPE_INDEX_TOP );
     for ( uint32_t u = 0 ; ok && u < model->unitCount ; u++ ) ok = tryCheckBlock( &checker, u, 0, SCOPE_INDEX_TOP );
+    if ( ok ) ok = tryRequireUnits( &checker );
 
     free( checker.defaults );
     free( checker.symbolState );
